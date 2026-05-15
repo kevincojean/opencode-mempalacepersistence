@@ -117,19 +117,18 @@ rows = db.execute("""
   WHERE m.session_id = ${JSON.stringify(sessId)} AND m.time_created > ${lastSync}
   ORDER BY m.time_created
 """).fetchall()
-db.close()
 texts = []
 for (mid, mts, mdata_raw) in rows:
     try: mdata = json.loads(mdata_raw)
     except: mdata = {}
     role = mdata.get("role", "unknown")
-    parts = db.execute("SELECT data FROM part WHERE message_id = ? ORDER BY time_created", (mid,)).fetchall()
-    for (pdata_raw,) in parts:
+    for (pdata_raw,) in db.execute("SELECT data FROM part WHERE message_id = ? ORDER BY time_created", (mid,)).fetchall():
         try:
             pdata = json.loads(pdata_raw)
             if pdata.get("type") == "text" and pdata.get("text","").strip():
                 texts.append({"role": role, "text": pdata.get("text").strip(), "ts": mts})
         except: pass
+db.close()
 print(json.dumps(texts))
 `)
 
