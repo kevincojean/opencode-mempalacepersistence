@@ -164,7 +164,7 @@ print(json.dumps(texts))
     const wingDir = join(OUT_DIR, wing)
     try {
       execSync(
-        `${MEMPALACE_BIN} --palace ${HOME}/opencode-memory mine ${wingDir} --mode convos --extract general --wing ${wing}`,
+        `${MEMPALACE_BIN} mine ${wingDir} --mode convos --extract general --wing ${wing}`,
         { encoding: "utf-8", timeout: 120000 },
       )
 // no-op
