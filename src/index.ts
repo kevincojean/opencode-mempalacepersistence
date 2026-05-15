@@ -260,14 +260,14 @@ log("loaded")
       const text = hasText(output.parts || [])
       if (!text) return
 
-log("user msg — sync")
-      dbSync()
+log("user msg - queue sync")
+      setTimeout(() => dbSync(), 500)
     },
 
     event: async ({ event }: any) => {
       if (event?.type !== "session.idle") return
-log("session idle — sync")
-      setTimeout(() => dbSync(), 2000)
+log("idle - queue sync")
+      setTimeout(() => dbSync(), 3000)
     },
   }
 }) satisfies Plugin
