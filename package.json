@@ -1,0 +1,29 @@
+{
+  "name": "opencode-mempalace",
+  "version": "1.0.0",
+  "description": "OpenCode plugin — auto-sync conversations to MemPalace memory in real-time with auto-categorization and Knowledge Graph",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["opencode", "mempalace", "memory", "opencode-plugin", "typescript"],
+  "author": "geco",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/geco/opencode-mempalace.git"
+  },
+  "bugs": {
+    "url": "https://github.com/geco/opencode-mempalace/issues"
+  },
+  "homepage": "https://github.com/geco/opencode-mempalace#readme",
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.15.0",
+    "@types/node": "^25.8.0",
+    "typescript": "^6.0.3"
+  }
+}
