@@ -1,4 +1,4 @@
-import { execSync } from "child_process"
+import { execSync, exec } from "child_process"
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, unlinkSync, appendFileSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
@@ -71,8 +71,7 @@ function getLastSync(): number {
 function dbSync(): void {
   if (pendingSync) return
   pendingSync = true
-  try { doDbSync(); log("sync ok") } catch (e) { log("sync err: " + String(e)) }
-  finally { pendingSync = false }
+  try { doDbSync() } catch (e) { log("sync err: " + String(e)) }
 }
 
 function doDbSync(): void {
@@ -96,13 +95,11 @@ print(json.dumps(rows))
 `)
 
   let sessionsArr: any[][]
-  try { sessionsArr = JSON.parse(sessions) } catch { return }
-  if (!sessionsArr || sessionsArr.length === 0) return
-
-// no-op
+  try { sessionsArr = JSON.parse(sessions) } catch { pendingSync = false; return }
+  if (!sessionsArr || sessionsArr.length === 0) { pendingSync = false; return }
 
   const now = Date.now()
-  const exported: Array<{ wing: string; fname: string }> = []
+  const exported: Array<{ wing: string; fname: string; dir: string }> = []
 
   for (const sess of sessionsArr) {
     const [sessId, title, worktree, directory] = sess
@@ -159,94 +156,71 @@ print(json.dumps(texts))
     const wingDir = join(OUT_DIR, wing)
     mkdirSync(wingDir, { recursive: true })
     writeFileSync(join(wingDir, fname), content + "\n")
-  // no-op
 
-    exported.push({ wing, fname })
+    exported.push({ wing, fname, dir: wingDir })
   }
 
-  if (exported.length === 0) return
+  if (exported.length === 0) { pendingSync = false; return }
 
-  for (const { wing, fname } of exported) {
-    const wingDir = join(OUT_DIR, wing)
-    try {
-      execSync(
-        `${MEMPALACE_BIN} mine ${wingDir} --mode convos --extract general --wing ${wing}`,
-        { encoding: "utf-8", timeout: 120000 },
-      )
-// no-op
-      rmSync(join(wingDir, fname))
-    } catch (_e2) { log("mine err: " + String(_e2)) }
-    try { rmdirSync(wingDir) } catch {}
-  }
-
+  // Save state immediately so next sync doesn't re-process
   writeFileSync(STATE_FILE, JSON.stringify({ last_sync_ms: now }))
   lastSyncTs = Date.now()
-// no-op
+  pendingSync = false
+  log(`queued ${exported.length} files for mining`)
 
-  // KG
-  try {
-    const raw = runPython(`
+  // Mining async (fire-and-forget, non-blocking)
+  for (const { wing, fname, dir: wingDir } of exported) {
+    const filePath = join(wingDir, fname)
+    exec(`${MEMPALACE_BIN} mine ${wingDir} --mode convos --extract general --wing ${wing}`, {
+      encoding: "utf-8",
+      timeout: 120000,
+    }, (err) => {
+      if (err) { log(`mine err ${wing}: ${err.message}`); return }
+      rmSync(filePath)
+      try { rmdirSync(wingDir) } catch {}
+      log(`mined ${wing}`)
+      // KG extraction after mining
+      try {
+        const raw = runPython(`
 from mempalace.config import MempalaceConfig
 import chromadb, json, re
-config = MempalaceConfig()
-client = chromadb.PersistentClient(path=config.palace_path)
-collection = client.get_collection(config.collection_name)
-docs = collection.get(limit=5000, include=["metadatas", "documents"])
-patterns = ${JSON.stringify(KG_PATTERNS)}
-result = []
-for did, meta, doc in zip(docs.get("ids",[]), docs.get("metadatas",[]), docs.get("documents",[])):
-    if not meta or not doc: continue
-    room = meta.get("room","") or ""
-    if room not in ("decision","milestone","problem","preference","emotional"): continue
-    date = doc.split("Date: ")[1][:10] if "Date: " in doc else ""
-    if not date: continue
-    lower = doc.lower()
-    if not any(pat in lower for pat in patterns.get(room,[])): continue
-    snippet = ""
-    for line in doc.strip().split("\\n")[:5]:
-        line = line.strip()
-        if line and not line.startswith("#") and not line.startswith("//") and not re.match(r"^\\d+\\.", line):
-            if len(line) > 20 and len(re.findall(r"[^a-zA-Z0-9\\s]", line)) / len(line) <= 0.3:
-                snippet = line[:120]
-                break
-    if snippet: result.append([date, room, snippet])
-print(json.dumps(result))
+c = MempalaceConfig()
+col = chromadb.PersistentClient(path=c.palace_path).get_collection(c.collection_name)
+d = col.get(limit=5000, include=["metadatas","documents"])
+p = ${JSON.stringify(KG_PATTERNS)}
+r = []
+for i,m,doc in zip(d.get("ids",[]), d.get("metadatas",[]), d.get("documents",[])):
+  if not m or not doc: continue
+  rm = m.get("room","")
+  if rm not in ("decision","milestone","problem","preference","emotional"): continue
+  da = doc.split("Date: ")[1][:10] if "Date: " in doc else ""
+  if not da: continue
+  if not any(pat in doc.lower() for pat in p.get(rm,[])): continue
+  for ln in doc.strip().split("\\n")[:5]:
+    l = ln.strip()
+    if l and not l.startswith("#") and len(l) > 20 and len(re.findall(r"[^a-zA-Z0-9\\s]", l))/len(l) <= 0.3:
+      r.append([da, rm, l[:120]]); break
+print(json.dumps(r))
 `)
-    const newFacts: Array<{ date: string; type: string; text: string }> = []
-    try { newFacts.push(...JSON.parse(raw).map((r: any[]) => ({ date: r[0], type: r[1], text: r[2] }))) } catch {}
-    if (newFacts.length > 0) {
-      const existing = runPython(`
-import sqlite3, json
-db = sqlite3.connect(${JSON.stringify(KG_DB)})
-rows = db.execute("SELECT subject, predicate, object FROM triples WHERE subject='user'").fetchall()
-db.close()
-print(json.dumps(rows))
-`)
-      const seen = new Set<string>()
-      try { for (const [, p, o] of JSON.parse(existing)) seen.add(`${p}::${o}`) } catch {}
-      const inserts: string[] = []
-      for (const f of newFacts) {
-        const key = `${f.type}::${f.text}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        const id = `t_user_${f.type}_${createHash("sha256").update(f.text).digest("hex").slice(0, 12)}`
-        const t = f.text.replace(/'/g, "''")
-        inserts.push(`INSERT OR IGNORE INTO triples (id, subject, predicate, object, valid_from, confidence, extracted_at) VALUES ('${id}', 'user', '${f.type}', '${t}', '${f.date}', 1.0, datetime('now'))`)
-      }
-      if (inserts.length > 0) {
-        runPython(`
-import sqlite3
-db = sqlite3.connect(${JSON.stringify(KG_DB)})
-for sql in ${JSON.stringify(inserts)}:
-    try: db.execute(sql)
-    except: pass
-db.commit()
-db.close()
-`)
-// no-op
-      } else {}/* no new */
-    }
-  } catch (_e3) { log("kg err: " + String(_e3)) }
+        const nf: any[] = JSON.parse(raw) || []
+        if (nf.length > 0) {
+          const ex = runPython(`import sqlite3,json;d=sqlite3.connect(${JSON.stringify(KG_DB)});r=d.execute("SELECT predicate,object FROM triples WHERE subject='user'").fetchall();d.close();print(json.dumps(r))`)
+          const seen = new Set<string>()
+          try { for (const [p, o] of JSON.parse(ex)) seen.add(p+"::"+o) } catch {}
+          const ins: string[] = []
+          for (const [d, t, x] of nf) {
+            const k = t+"::"+x
+            if (seen.has(k)) continue
+            seen.add(k)
+            ins.push(`INSERT OR IGNORE INTO triples(id,subject,predicate,object,valid_from,confidence,extracted_at) VALUES('t_user_${t}_${createHash("sha256").update(x).digest("hex").slice(0,12)}','user','${t}','${x.replace(/'/g,"''")}','${d}',1.0,datetime('now'))`)
+          }
+          if (ins.length > 0) {
+            runPython(`import sqlite3;db=sqlite3.connect(${JSON.stringify(KG_DB)});[db.execute(s) for s in ${JSON.stringify(ins)}];db.commit();db.close()`)
+          }
+        }
+      } catch {}
+    })
+  }
 }
 
 export default (async () => {
