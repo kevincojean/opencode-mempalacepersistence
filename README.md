@@ -39,7 +39,7 @@ The plugin hooks into OpenCode's `chat.message` event and buffers each conversat
 3. **Categorizes** by wing (developer, creative, emotions, family, consciousness)
 4. **Mines**: Calls `mempalace mine` to store the turn in vector memory
 5. **Knowledge Graph**: Extracts facts via keyword matching + chromadb query
-6. **Deduplicates**: SHA256 hashing of turn content — zero duplicates
+6. **No duplicates**: Each turn is unique content — no dedup overhead needed
 
 ## License
 
