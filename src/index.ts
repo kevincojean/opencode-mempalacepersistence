@@ -1,5 +1,5 @@
 import { execSync } from "child_process"
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, unlinkSync, appendFileSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, unlinkSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import { createHash } from "crypto"
@@ -13,12 +13,6 @@ const STATE_FILE = join(HOME, ".mempalace/sync_state.json")
 const KG_DB = join(HOME, ".mempalace/knowledge_graph.sqlite3")
 const OUT_DIR = "/tmp/oc-sessions"
 const TMP_SCRIPT = "/tmp/oc-plugin-query.py"
-const LOG_FILE = "/tmp/opencode-mempalace.log"
-
-function log(msg: string) {
-  const ts = new Date().toISOString()
-  try { appendFileSync(LOG_FILE, `[${ts}] ${msg}\n`) } catch {}
-}
 
 let pendingSync = false
 let lastSyncTs = 0
@@ -71,12 +65,12 @@ function getLastSync(): number {
 function dbSync(): void {
   if (pendingSync) return
   pendingSync = true
-  try { doDbSync() } catch (e: any) { log(`sync error: ${e.message || e}`) }
+  try { doDbSync() } catch (_e) {}
   finally { pendingSync = false }
 }
 
 function doDbSync(): void {
-  if (lastSyncTs && Date.now() - lastSyncTs < 5000) { log("debounce"); return }
+  if (lastSyncTs && Date.now() - lastSyncTs < 5000) return
 
   const lastSync = getLastSync()
 
@@ -99,7 +93,7 @@ print(json.dumps(rows))
   try { sessionsArr = JSON.parse(sessions) } catch { return }
   if (!sessionsArr || sessionsArr.length === 0) return
 
-  log(`found ${sessionsArr.length} sessions with new messages`)
+// no-op
 
   const now = Date.now()
   const exported: Array<{ wing: string; fname: string }> = []
@@ -159,12 +153,12 @@ print(json.dumps(texts))
     const wingDir = join(OUT_DIR, wing)
     mkdirSync(wingDir, { recursive: true })
     writeFileSync(join(wingDir, fname), content + "\n")
-    log(`exported ${fname} -> ${wing} (${content.length} chars)`)
+  // no-op
 
     exported.push({ wing, fname })
   }
 
-  if (exported.length === 0) { log("no sessions exported"); return }
+  if (exported.length === 0) return
 
   for (const { wing, fname } of exported) {
     const wingDir = join(OUT_DIR, wing)
@@ -173,15 +167,15 @@ print(json.dumps(texts))
         `${MEMPALACE_BIN} --palace ${HOME}/opencode-memory mine ${wingDir} --mode convos --extract general --wing ${wing}`,
         { encoding: "utf-8", timeout: 120000 },
       )
-      log(`mined ${wing}`)
+// no-op
       rmSync(join(wingDir, fname))
-    } catch (e: any) { log(`mine error ${wing}: ${e.message || e}`) }
+    } catch (_e2) { console.error("[mempalace] mine error", _e2) }
     try { rmdirSync(wingDir) } catch {}
   }
 
   writeFileSync(STATE_FILE, JSON.stringify({ last_sync_ms: now }))
   lastSyncTs = Date.now()
-  log("sync done")
+// no-op
 
   // KG
   try {
@@ -243,15 +237,15 @@ for sql in ${JSON.stringify(inserts)}:
 db.commit()
 db.close()
 `)
-        log(`kg: ${inserts.length} new`)
-      } else { log("kg: no new") }
+// no-op
+      } else {}/* no new */
     }
-  } catch (e: any) { log(`kg error: ${e.message || e}`) }
+  } catch (_e3) { console.error("[mempalace] kg error", _e3) }
 }
 
 export default (async () => {
   mkdirSync(OUT_DIR, { recursive: true })
-  log("Plugin loaded — DB-based")
+console.error("[mempalace] Plugin loaded")
 
   return {
     "chat.message": async (_input, output) => {
@@ -260,13 +254,13 @@ export default (async () => {
       const text = hasText(output.parts || [])
       if (!text) return
 
-      log(`user message — sync pending content`)
+// no-op
       dbSync()
     },
 
     event: async ({ event }: any) => {
       if (event?.type !== "session.idle") return
-      log(`session.idle — sync pending content`)
+// no-op
       setTimeout(() => dbSync(), 2000)
     },
   }

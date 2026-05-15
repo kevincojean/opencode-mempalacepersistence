@@ -32,16 +32,17 @@ A self-contained OpenCode plugin that automatically saves conversations to MemPa
 
 ## How it works
 
-The plugin uses two hooks to detect complete conversation turns:
+The plugin uses two triggers to detect complete conversation turns:
 
-1. **`chat.message`** — fires when the user sends a message (buffers the user text)
-2. **`event` (message.updated)** — fires when the assistant response finishes streaming (queries DB for assistant text, then syncs)
+1. **`chat.message`** (user message) — syncs the previous turn (user Q + assistant A)
+2. **`session.idle`** — syncs pending content when the session becomes idle (catches the last turn before shutdown)
 
-On each complete turn (user + assistant):
-1. **Categorizes** by wing (developer, creative, emotions, family, consciousness)
-2. **Mines**: Calls `mempalace mine` to store the turn in vector memory
-3. **Knowledge Graph**: Extracts facts via keyword matching + chromadb query
-4. **Deduplicates**: Each turn is unique content — no sync overhead
+On each sync:
+1. Queries the OpenCode SQLite DB for new messages since the last sync
+2. **Categorizes** by wing (developer, creative, emotions, family, consciousness)
+3. **Mines**: Calls `mempalace mine` to store the turn in vector memory
+4. **Knowledge Graph**: Extracts facts via keyword matching + chromadb query
+5. **No duplicates**: Each turn has a unique content hash
 
 ## License
 
