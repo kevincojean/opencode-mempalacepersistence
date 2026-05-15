@@ -21,9 +21,6 @@ function log(msg: string) {
 }
 
 let pendingSync = false
-let turnBuffer: Array<{ role: string; text: string }> = []
-let currentSessionId = ""
-let lastUserTs = 0
 let lastSyncTs = 0
 
 function runPython(code: string): string {
@@ -66,91 +63,128 @@ function hasText(parts: any[]): string {
     .join("\n")
 }
 
-function formatTurn(): string {
-  const lines: string[] = [
-    `# OpenCode session`,
-    `Date: ${new Date().toISOString().slice(0, 10)}`,
-    `Session: ${currentSessionId || "unknown"}`,
-    "",
-  ]
-  for (const e of turnBuffer) {
-    lines.push(`## ${e.role.toUpperCase()}`)
-    lines.push("")
-    lines.push(e.text)
-    lines.push("")
-  }
-  return lines.join("\n").trim()
+function getLastSync(): number {
+  if (!existsSync(STATE_FILE)) return 0
+  try { return JSON.parse(readFileSync(STATE_FILE, "utf-8")).last_sync_ms || 0 } catch { return 0 }
 }
 
-function getAsstText(sessionId: string, sinceMs: number): string {
-  const result = runPython(`
+function dbSync(): void {
+  if (pendingSync) return
+  pendingSync = true
+  try { doDbSync() } catch (e: any) { log(`sync error: ${e.message || e}`) }
+  finally { pendingSync = false }
+}
+
+function doDbSync(): void {
+  if (lastSyncTs && Date.now() - lastSyncTs < 5000) { log("debounce"); return }
+
+  const lastSync = getLastSync()
+
+  const sessions = runPython(`
 import sqlite3, json
 db = sqlite3.connect(${JSON.stringify(OPENCODE_DB)})
 rows = db.execute("""
-  SELECT p.data FROM message m
-  JOIN part p ON p.message_id = m.id
-  WHERE m.session_id = ? AND m.time_created > ?
+  SELECT DISTINCT s.id, s.title, p.worktree, s.directory, s.slug, s.time_created
+  FROM session s
+  LEFT JOIN project p ON s.project_id = p.id
+  INNER JOIN message m ON m.session_id = s.id
+  WHERE m.time_created > ${lastSync}
+  ORDER BY s.time_created
+""").fetchall()
+db.close()
+print(json.dumps(rows))
+`)
+
+  let sessionsArr: any[][]
+  try { sessionsArr = JSON.parse(sessions) } catch { return }
+  if (!sessionsArr || sessionsArr.length === 0) return
+
+  log(`found ${sessionsArr.length} sessions with new messages`)
+
+  const now = Date.now()
+  const exported: Array<{ wing: string; fname: string }> = []
+
+  for (const sess of sessionsArr) {
+    const [sessId, title, worktree, directory] = sess
+    const label = (title || "").replace(/[^a-zA-Z0-9 _-]/g, "_") || (sessId || "").slice(0, 12)
+    const prefix = `${new Date().toISOString().slice(0, 10)}_${label.slice(0, 30)}_${(sessId || "").slice(0, 8)}`
+
+    const msgs = runPython(`
+import sqlite3, json
+db = sqlite3.connect(${JSON.stringify(OPENCODE_DB)})
+rows = db.execute("""
+  SELECT m.id, m.time_created, m.data FROM message m
+  WHERE m.session_id = ${JSON.stringify(sessId)} AND m.time_created > ${lastSync}
   ORDER BY m.time_created
-""", (${JSON.stringify(sessionId)}, ${sinceMs})).fetchall()
+""").fetchall()
 db.close()
 texts = []
-for (row,) in rows:
-    try:
-        pdata = json.loads(row)
-        if pdata.get("type") == "text" and pdata.get("text","").strip():
-            texts.append(pdata.get("text","").strip())
-    except: pass
+for (mid, mts, mdata_raw) in rows:
+    try: mdata = json.loads(mdata_raw)
+    except: mdata = {}
+    role = mdata.get("role", "unknown")
+    parts = db.execute("SELECT data FROM part WHERE message_id = ? ORDER BY time_created", (mid,)).fetchall()
+    for (pdata_raw,) in parts:
+        try:
+            pdata = json.loads(pdata_raw)
+            if pdata.get("type") == "text" and pdata.get("text","").strip():
+                texts.append({"role": role, "text": pdata.get("text").strip(), "ts": mts})
+        except: pass
 print(json.dumps(texts))
 `)
-  try {
-    return JSON.parse(result).filter((t: string) => t).join("\n")
-  } catch {
-    return ""
-  }
-}
 
-function doSync(): void {
-  if (turnBuffer.length < 2) {
-    log(`sync skip: buffer too short (${turnBuffer.length})`)
-    return
-  }
-  if (lastSyncTs && Date.now() - lastSyncTs < 3000) {
-    log(`sync skip: debounce`)
-    return
-  }
+    let msgList: Array<{ role: string; text: string; ts: number }>
+    try { msgList = JSON.parse(msgs) } catch { continue }
+    if (msgList.length < 2) continue
 
-  const content = formatTurn()
-  if (!content) { log("sync skip: empty"); return }
+    const lines: string[] = [
+      `# ${title || label}`,
+      `Date: ${new Date().toISOString().slice(0, 10)}`,
+      `Session: ${sessId}`,
+      "",
+    ]
+    for (const m of msgList) {
+      const ts = m.ts ? new Date(m.ts).toISOString().slice(11, 19) : ""
+      lines.push(`## ${m.role.toUpperCase()} — ${ts}`)
+      lines.push("")
+      lines.push(m.text)
+      lines.push("")
+    }
 
-  const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 12)
-  const wing = categorize(content)
-  const prefix = new Date().toISOString().slice(0, 10)
-  const fname = `turn_${prefix}_${contentHash}.txt`
-  const wingDir = join(OUT_DIR, wing)
+    const content = lines.join("\n").trim()
+    if (!content) continue
 
-  try {
+    const wing = categorize(content)
+    const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 12)
+    const fname = `sync_${prefix}_${contentHash}.txt`
+    const wingDir = join(OUT_DIR, wing)
     mkdirSync(wingDir, { recursive: true })
     writeFileSync(join(wingDir, fname), content + "\n")
-    log(`exported ${fname} -> ${wing}`)
+    log(`exported ${fname} -> ${wing} (${content.length} chars)`)
 
-    execSync(
-      `${MEMPALACE_BIN} --palace ${HOME}/opencode-memory mine ${wingDir} --mode convos --extract general --wing ${wing}`,
-      { encoding: "utf-8", timeout: 120000 },
-    )
-    log(`mined ${wing}`)
-
-    rmSync(join(wingDir, fname))
-    rmdirSync(wingDir)
-  } catch (e: any) {
-    log(`mine error: ${e.message || e}`)
-    return
+    exported.push({ wing, fname })
   }
 
-  writeFileSync(STATE_FILE, JSON.stringify({ last_sync_ms: Date.now() }))
+  if (exported.length === 0) { log("no sessions exported"); return }
+
+  for (const { wing, fname } of exported) {
+    const wingDir = join(OUT_DIR, wing)
+    try {
+      execSync(
+        `${MEMPALACE_BIN} --palace ${HOME}/opencode-memory mine ${wingDir} --mode convos --extract general --wing ${wing}`,
+        { encoding: "utf-8", timeout: 120000 },
+      )
+      log(`mined ${wing}`)
+      rmSync(join(wingDir, fname))
+    } catch (e: any) { log(`mine error ${wing}: ${e.message || e}`) }
+    try { rmdirSync(wingDir) } catch {}
+  }
+
+  writeFileSync(STATE_FILE, JSON.stringify({ last_sync_ms: now }))
   lastSyncTs = Date.now()
   log("sync done")
 
-  // KG extraction
+  // KG
   try {
     const raw = runPython(`
 from mempalace.config import MempalaceConfig
@@ -168,8 +202,7 @@ for did, meta, doc in zip(docs.get("ids",[]), docs.get("metadatas",[]), docs.get
     date = doc.split("Date: ")[1][:10] if "Date: " in doc else ""
     if not date: continue
     lower = doc.lower()
-    room_patterns = patterns.get(room, [])
-    if not any(pat in lower for pat in room_patterns): continue
+    if not any(pat in lower for pat in patterns.get(room,[])): continue
     snippet = ""
     for line in doc.strip().split("\\n")[:5]:
         line = line.strip()
@@ -177,8 +210,7 @@ for did, meta, doc in zip(docs.get("ids",[]), docs.get("metadatas",[]), docs.get
             if len(line) > 20 and len(re.findall(r"[^a-zA-Z0-9\\s]", line)) / len(line) <= 0.3:
                 snippet = line[:120]
                 break
-    if snippet:
-        result.append([date, room, snippet])
+    if snippet: result.append([date, room, snippet])
 print(json.dumps(result))
 `)
     const newFacts: Array<{ date: string; type: string; text: string }> = []
@@ -212,53 +244,31 @@ for sql in ${JSON.stringify(inserts)}:
 db.commit()
 db.close()
 `)
-        log(`kg: ${inserts.length} new facts`)
-      } else {
-        log("kg: all facts already exist")
-      }
+        log(`kg: ${inserts.length} new`)
+      } else { log("kg: no new") }
     }
-  } catch (e: any) {
-    log(`kg error: ${e.message || e}`)
-  }
+  } catch (e: any) { log(`kg error: ${e.message || e}`) }
 }
 
 export default (async () => {
   mkdirSync(OUT_DIR, { recursive: true })
-  log("Plugin loaded — event-based")
+  log("Plugin loaded — DB-based")
 
   return {
     "chat.message": async (_input, output) => {
       const role = (output.message as any).role
       if (role !== "user") return
-
       const text = hasText(output.parts || [])
       if (!text) return
 
-      log(`user message (${text.length} chars)`)
-
-      if (turnBuffer.length >= 2) doSync()
-      turnBuffer = [{ role: "user", text }]
-      currentSessionId = (output.message as any).sessionID || ""
-      lastUserTs = Date.now()
+      log(`user message — sync pending content`)
+      dbSync()
     },
 
     event: async ({ event }: any) => {
-      if (event?.type !== "message.updated") return
-      const info = event.properties?.info
-      if (!info || info.role !== "assistant") return
-      if (!info.time?.completed && !info.finish) return
-
-      log(`assistant completed`)
-
-      if (!currentSessionId || !lastUserTs) return
-
-      const asstText = getAsstText(currentSessionId, lastUserTs)
-      if (!asstText) { log("no asst text found in db"); return }
-
-      turnBuffer.push({ role: "assistant", text: asstText })
-      log(`asst text: ${asstText.length} chars, buffer=${turnBuffer.length}`)
-
-      if (turnBuffer.length >= 2) doSync()
+      if (event?.type !== "session.idle") return
+      log(`session.idle — sync pending content`)
+      setTimeout(() => dbSync(), 2000)
     },
   }
 }) satisfies Plugin
