@@ -105,17 +105,10 @@ function doSyncTurn(): void {
   const content = formatTurn(turnBuffer)
   if (!content) return
 
-  const turnHash = createHash("sha256").update(content).digest("hex")
-  const lastHash = getLastSyncMs()
-  if (lastHash && turnBuffer.length <= 2) {
-    const stored = readFileSync(STATE_FILE, "utf-8")
-    const data = JSON.parse(stored)
-    if (data.last_turn_hash === turnHash) return
-  }
-
+  const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 12)
   const wing = categorize(content)
   const prefix = new Date().toISOString().slice(0, 10) + "_global_turn"
-  const fname = `turn_${prefix}_${turnHash.slice(0, 12)}.txt`
+  const fname = `turn_${prefix}_${contentHash}.txt`
   const wingDir = join(OUT_DIR, wing)
   mkdirSync(wingDir, { recursive: true })
   writeFileSync(join(wingDir, fname), content + "\n")
@@ -129,11 +122,6 @@ function doSyncTurn(): void {
   rmdirSync(wingDir)
 
   saveState(Date.now())
-  writeFileSync(
-    STATE_FILE,
-    JSON.stringify({ last_sync_ms: Date.now(), last_turn_hash: turnHash }),
-  )
-
   extractKG()
 }
 
