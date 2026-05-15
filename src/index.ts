@@ -1,5 +1,5 @@
 import { execSync } from "child_process"
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, unlinkSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, unlinkSync, appendFileSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import { createHash } from "crypto"
@@ -13,6 +13,12 @@ const STATE_FILE = join(HOME, ".mempalace/sync_state.json")
 const KG_DB = join(HOME, ".mempalace/knowledge_graph.sqlite3")
 const OUT_DIR = "/tmp/oc-sessions"
 const TMP_SCRIPT = "/tmp/oc-plugin-query.py"
+const LOG_FILE = "/tmp/opencode-mempalace.log"
+
+function log(msg: string) {
+  const ts = new Date().toISOString()
+  try { appendFileSync(LOG_FILE, `[${ts}] ${msg}\n`) } catch {}
+}
 
 let pendingSync = false
 let lastSyncTs = 0
@@ -65,7 +71,7 @@ function getLastSync(): number {
 function dbSync(): void {
   if (pendingSync) return
   pendingSync = true
-  try { doDbSync(); console.error("[mempalace] sync ok") } catch (e) { console.error("[mempalace] sync err:", e) }
+  try { doDbSync(); log("sync ok") } catch (e) { log("sync err: " + String(e)) }
   finally { pendingSync = false }
 }
 
@@ -169,7 +175,7 @@ print(json.dumps(texts))
       )
 // no-op
       rmSync(join(wingDir, fname))
-    } catch (_e2) { console.error("[mempalace] mine error", _e2) }
+    } catch (_e2) { log("mine err: " + String(_e2)) }
     try { rmdirSync(wingDir) } catch {}
   }
 
@@ -240,12 +246,12 @@ db.close()
 // no-op
       } else {}/* no new */
     }
-  } catch (_e3) { console.error("[mempalace] kg error", _e3) }
+  } catch (_e3) { log("kg err: " + String(_e3)) }
 }
 
 export default (async () => {
   mkdirSync(OUT_DIR, { recursive: true })
-console.error("[mempalace] Plugin loaded")
+log("loaded")
 
   return {
     "chat.message": async (_input, output) => {
@@ -254,13 +260,13 @@ console.error("[mempalace] Plugin loaded")
       const text = hasText(output.parts || [])
       if (!text) return
 
-console.error("[mempalace] user message — checking for pending content")
+log("user msg — sync")
       dbSync()
     },
 
     event: async ({ event }: any) => {
       if (event?.type !== "session.idle") return
-console.error("[mempalace] session idle — checking for pending content")
+log("session idle — sync")
       setTimeout(() => dbSync(), 2000)
     },
   }
