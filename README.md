@@ -1,28 +1,28 @@
 # opencode-mempalace
 
-Un plugin per OpenCode che salva automaticamente ogni conversazione in MemPalace e usa la memoria per risponderti meglio. In tempo reale, niente cron, niente script esterni.
+An OpenCode plugin that automatically saves every conversation to MemPalace and uses stored memory to provide better, context-aware responses. Real-time, zero cron, zero external scripts.
 
-> **It just works** — installi, usi OpenCode, il plugin fa tutto da solo.
+> **It just works** — install, use OpenCode, the plugin handles the rest.
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ---
 
-## Come funziona in 3 secondi
+## How it works in 3 seconds
 
-| Senza plugin | Con plugin |
+| Without plugin | With plugin |
 |---|---|
-| Ogni sessione parte da zero | Il modello sa chi sei e cosa hai fatto |
-| Devi ripetere contesto | La memoria è automatica |
-| Niente Knowledge Graph | Decisioni, milestone, problemi tracciati |
+| Every session starts from scratch | The model knows who you are and what you've done |
+| You repeat context each time | Memory is automatic |
+| No Knowledge Graph | Decisions, milestones, problems tracked |
 
-Il modello cerca in MemPalace ad ogni domanda (via AGENTS.md + MCP) e il plugin salva ogni risposta. Un ciclo perfetto.
+The model searches MemPalace on every question (via AGENTS.md + MCP), and the plugin saves every response. A perfect feedback loop.
 
 ---
 
-## Installazione
+## Installation
 
-### 1. Plugin (salva le conversazioni)
+### 1. Plugin (saves conversations)
 
 ```json
 {
@@ -30,33 +30,33 @@ Il modello cerca in MemPalace ad ogni domanda (via AGENTS.md + MCP) e il plugin 
 }
 ```
 
-Aggiungi questa riga al tuo `~/.config/opencode/opencode.json` e riavvia OpenCode.
+Add this line to your `~/.config/opencode/opencode.json` and restart OpenCode.
 
-### 2. Istruzioni per il modello (usa la memoria)
+### 2. Instructions for the model (uses memory)
 
-Crea `~/.config/opencode/AGENTS.md`:
+Create `~/.config/opencode/AGENTS.md`:
 
 ```markdown
-# Istruzioni di memoria
+# Memory & Knowledge instructions
 
-Prima di rispondere, cerca sempre in MemPalace usando gli strumenti MCP.
+Before answering the user, always search your MemPalace memory for relevant context using the MCP tools.
 
-1. **Cerca in MemPalace**: Chiama `mempalace_search` con la domanda dell'utente. Prendi i 5-10 risultati più rilevanti.
-2. **Cerca nella Knowledge Graph**: Chiama `mempalace_kg_query` per "user". Filtra tenendo solo i fatti che contengono parole chiave della domanda.
-3. **Usa il contesto**: Integra le informazioni trovate nella risposta, citando la fonte quando utile.
+1. **Search MemPalace**: Call `mempalace_search` with the user's question or key topics as query. Get the top 5-10 most relevant memory drawers.
+2. **Query Knowledge Graph**: Call `mempalace_kg_query` for entity "user". Then filter the returned facts — keep only those whose text contains keywords from the user's question.
+3. **Use the context**: Incorporate relevant memory and facts into your response, referencing the source naturally when useful.
 ```
 
-### 3. Identità (chi sei)
+### 3. Identity (who you are)
 
-Crea `~/.mempalace/identity.txt`:
+Create `~/.mempalace/identity.txt`:
 
 ```
-Sono [nome], uno [ruolo]. Lavoro con [tecnologie]. I miei progetti principali sono [progetti].
+I am [name], a [role]. I work with [technologies]. My main projects are [projects].
 ```
 
-Viene caricata automaticamente ad ogni sessione via `instructions` in opencode.json.
+This is loaded automatically at session start via `instructions` in opencode.json.
 
-### 4. Configurazione completa
+### 4. Complete configuration
 
 `~/.config/opencode/opencode.json`:
 
@@ -75,113 +75,115 @@ Viene caricata automaticamente ad ogni sessione via `instructions` in opencode.j
 }
 ```
 
-### 5. MemPalace (se non lo hai già)
+### 5. MemPalace (if not already installed)
 
 ```bash
-# Installa
+# Install
 pipx install mempalace
 
-# Crea il palace
+# Create palace
 mempalace init ~/opencode-memory
 
-# Configura MCP
+# Configure MCP
 mempalace mcp
 ```
 
-Il comando `mempalace mcp` ti darà il comando esatto per il tuo setup.
+The `mempalace mcp` command gives you the exact MCP setup string for your configuration.
 
 ---
 
-## Cosa succede dopo l'installazione
+## What happens after installation
 
 ```
-Tu fai una domanda
-  → AGENTS.md dice al modello: "cerca in MemPalace prima"
-  → Il modello chiama mempalace_search("domanda") via MCP
-  → Trova ricordi rilevanti → risponde meglio
+You ask a question
+  → AGENTS.md tells the model: "search MemPalace first"
+  → The model calls mempalace_search("question") via MCP
+  → Finds relevant memories → gives a better answer
 
-Il modello risponde
-  → Il plugin opencode-mempalace rileva la risposta completata
-  → Salva la conversazione in MemPalace
-  → Estrae fatti per la Knowledge Graph
+The model responds
+  → The opencode-mempalace plugin detects the response is complete
+  → Saves the conversation to MemPalace
+  → Extracts Knowledge Graph facts
 
-Alla prossima domanda
-  → Il modello trova il ricordo di prima → risposta coerente
-  → Il ciclo continua, la memoria cresce
+Next time you ask
+  → The model finds the previous memory → coherent responses
+  → The cycle continues, memory grows
 ```
 
 ---
 
-## Cosa viene salvato
+## What gets saved
 
-Ad ogni turno (domanda + risposta):
+Every turn (question + answer):
 
-- **Testo** categorizzato per wing (developer, creative, emotions, family, consciousness)
-- **Knowledge Graph**: fatti estratti automaticamente
-  - `decision` → "ho deciso di usare TypeScript"
-  - `milestone` → "completato deploy del backend"
-  - `problem` → "errore chromadb: ModuleNotFoundError"
-  - `preference` → "preferisco Svelte a React"
-  - `emotional` → "frustrato con Docker compose"
+- **Text** categorized by wing (developer, creative, emotions, family, consciousness)
+- **Knowledge Graph**: automatically extracted facts
+  - `decision` → "decided to use TypeScript"
+  - `milestone` → "backend deploy completed"
+  - `problem` → "chromadb ModuleNotFoundError"
+  - `preference` → "prefer Svelte over React"
+  - `emotional` → "frustrated with Docker compose"
 
 ---
 
-## Architettura interna
+## Architecture
 
 ```
-                 ┌─────────────────────────┐
-                 │     OpenCode             │
-                 │                          │
-  User msg ─────►│  chat.message hook       │
-                 │    ↓                     │
-                 │  Interroga DB OpenCode   │
-                 │  (messaggi dal lastSync) │
-                 │    ↓                     │
-                 │  Categorizza per wing    │
-                 │    ↓                     │
-                 │  Exporta delta → tmp     │
-                 │    ↓                     │
-                 │  mempalace mine          │
-                 │    ↓                     │
-                 │  Estrai KG facts         │
-                 │    ↓                     │
-  Session idle ─►│  session.idle hook       │
-                 │  (salva ultimo turno)    │
-                 └─────────────────────────┘
+                 ┌──────────────────────────┐
+                 │       OpenCode            │
+                 │                           │
+  User msg ─────►│  chat.message hook        │
+                 │    ↓                      │
+                 │  Query OpenCode DB        │
+                 │  (messages since lastSync)│
+                 │    ↓                      │
+                 │  Categorize by wing       │
+                 │    ↓                      │
+                 │  Export delta → tmp       │
+                 │    ↓                      │
+                 │  Save state immediately   │
+                 │    ↓                      │
+                 │  mempalace mine (async)   │ ← non-blocking
+                 │    ↓                      │
+                 │  Extract KG facts         │
+                 │    ↓                      │
+  Session idle ─►│  session.idle hook        │
+                 │  (saves last turn)        │
+                 └──────────────────────────┘
                             │
                             ▼
-                 ┌─────────────────────────┐
-                 │     MemPalace            │
-                 │  ~/opencode-memory/      │
-                 │  Vector DB + KG SQLite   │
-                 └─────────────────────────┘
+                 ┌──────────────────────────┐
+                 │      MemPalace            │
+                 │  ~/opencode-memory/       │
+                 │  Vector DB + KG SQLite    │
+                 └──────────────────────────┘
                             ▲
                             │
-                 ┌─────────────────────────┐
-                 │  AGENTS.md + MCP         │
-                 │  Il modello cerca        │
-                 │  in MemPalace ad ogni    │
-                 │  domanda                 │
-                 └─────────────────────────┘
+                 ┌──────────────────────────┐
+                 │  AGENTS.md + MCP          │
+                 │  The model searches       │
+                 │  MemPalace on every       │
+                 │  question                 │
+                 └──────────────────────────┘
 ```
 
 ---
 
-## File rilevanti
+## Relevant files
 
-| File | Cosa fa |
+| File | Purpose |
 |---|---|
-| `~/.config/opencode/opencode.json` | Config OpenCode con plugin + MCP + instructions |
-| `~/.config/opencode/AGENTS.md` | Dice al modello di cercare in MemPalace |
-| `~/.mempalace/identity.txt` | La tua identità (caricata ad ogni sessione) |
-| `~/.mempalace/config.json` | Config MemPalace (path palace, wings, keywords) |
-| `~/.mempalace/knowledge_graph.sqlite3` | Knowledge Graph (fatti strutturati) |
-| `~/opencode-memory/` | Vector DB di MemPalace (tutti i drawer) |
-| `~/.mempalace/sync_state.json` | Stato ultimo sync (plugin + script Python) |
+| `~/.config/opencode/opencode.json` | OpenCode config with plugin + MCP + instructions |
+| `~/.config/opencode/AGENTS.md` | Tells the model to search MemPalace |
+| `~/.mempalace/identity.txt` | Your identity (loaded every session) |
+| `~/.mempalace/config.json` | MemPalace config (palace path, wings, keywords) |
+| `~/.mempalace/knowledge_graph.sqlite3` | Knowledge Graph (structured facts) |
+| `~/opencode-memory/` | MemPalace vector DB (all drawers) |
+| `~/.mempalace/sync_state.json` | Last sync state (plugin + Python script) |
 
 ---
 
-## From npm
+## Install from npm
 
 ```json
 {
@@ -196,6 +198,14 @@ Ad ogni turno (domanda + risposta):
   "plugin": ["/path/to/opencode-mempalace/dist/index.js"]
 }
 ```
+
+## Debug logging
+
+```bash
+export OPENCODE_MEMPALACE_DEBUG=1
+```
+
+When set, the plugin writes a debug log to `/tmp/opencode-mempalace.log`.
 
 ---
 
