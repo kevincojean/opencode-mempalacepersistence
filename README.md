@@ -1,4 +1,4 @@
-# opencode-mempalace
+# opencode-mempalace-persistence
 
 An OpenCode plugin that automatically saves every conversation to MemPalace and uses stored memory to provide better, context-aware responses. Real-time, zero cron, zero external scripts.
 
@@ -26,7 +26,7 @@ The model searches MemPalace on every question (via AGENTS.md + MCP), and the pl
 
 ```json
 {
-  "plugin": ["opencode-mempalace"]
+  "plugin": ["opencode-mempalace-persistence"]
 }
 ```
 
@@ -64,7 +64,7 @@ This is loaded automatically at session start via `instructions` in opencode.jso
 {
   "model": "opencode/deepseek-v4-flash-free",
   "instructions": ["AGENTS.md", "~/.mempalace/identity.txt"],
-  "plugin": ["opencode-mempalace"],
+  "plugin": ["opencode-mempalace-persistence"],
   "mcp": {
     "mempalace": {
       "type": "local",
@@ -101,7 +101,7 @@ You ask a question
   → Finds relevant memories → gives a better answer
 
 The model responds
-  → The opencode-mempalace plugin detects the response is complete
+  → The opencode-mempalace-persistence plugin detects the response is complete
   → Saves the conversation to MemPalace
   → Extracts Knowledge Graph facts
 
@@ -187,7 +187,7 @@ Every turn (question + answer):
 
 ```json
 {
-  "plugin": ["opencode-mempalace"]
+  "plugin": ["opencode-mempalace-persistence"]
 }
 ```
 
@@ -195,7 +195,7 @@ Every turn (question + answer):
 
 ```json
 {
-  "plugin": ["/path/to/opencode-mempalace/dist/index.js"]
+  "plugin": ["/path/to/opencode-mempalace-persistence/dist/index.js"]
 }
 ```
 

@@ -1,5 +1,5 @@
 {
-  "name": "opencode-mempalace",
+  "name": "opencode-mempalace-persistence",
   "version": "1.0.0",
   "description": "OpenCode plugin — auto-sync conversations to MemPalace memory in real-time with auto-categorization and Knowledge Graph",
   "main": "dist/index.js",
