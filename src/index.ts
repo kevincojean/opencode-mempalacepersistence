@@ -65,7 +65,7 @@ function getLastSync(): number {
 function dbSync(): void {
   if (pendingSync) return
   pendingSync = true
-  try { doDbSync() } catch (_e) {}
+  try { doDbSync(); console.error("[mempalace] sync ok") } catch (e) { console.error("[mempalace] sync err:", e) }
   finally { pendingSync = false }
 }
 
@@ -254,13 +254,13 @@ console.error("[mempalace] Plugin loaded")
       const text = hasText(output.parts || [])
       if (!text) return
 
-// no-op
+console.error("[mempalace] user message — checking for pending content")
       dbSync()
     },
 
     event: async ({ event }: any) => {
       if (event?.type !== "session.idle") return
-// no-op
+console.error("[mempalace] session idle — checking for pending content")
       setTimeout(() => dbSync(), 2000)
     },
   }
