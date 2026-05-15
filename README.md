@@ -32,14 +32,14 @@ A self-contained OpenCode plugin that automatically saves conversations to MemPa
 
 ## How it works
 
-The plugin hooks into `chat.message` and triggers a sync after every response:
+The plugin hooks into OpenCode's `chat.message` event and buffers each conversation turn:
 
-1. Reads OpenCode SQLite DB for new messages since last sync (delta)
-2. Categorizes by wing (developer, creative, emotions, family, consciousness)
-3. Exports delta conversations to temp files
-4. Calls `mempalace mine` to store in vector memory
-5. Extracts Knowledge Graph facts via keyword matching + chromadb
-6. Deduplicates via SHA256 hashing — zero duplicates
+1. **Buffers messages**: Listens to `chat.message` events and buffers user + assistant text from the message parts
+2. **Turn detection**: When a new user message arrives, the previous assistant response is complete → sync triggers
+3. **Categorizes** by wing (developer, creative, emotions, family, consciousness)
+4. **Mines**: Calls `mempalace mine` to store the turn in vector memory
+5. **Knowledge Graph**: Extracts facts via keyword matching + chromadb query
+6. **Deduplicates**: SHA256 hashing of turn content — zero duplicates
 
 ## License
 
