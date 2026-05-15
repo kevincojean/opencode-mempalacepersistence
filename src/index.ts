@@ -13,9 +13,11 @@ const STATE_FILE = join(HOME, ".mempalace/sync_state.json")
 const KG_DB = join(HOME, ".mempalace/knowledge_graph.sqlite3")
 const OUT_DIR = "/tmp/oc-sessions"
 const TMP_SCRIPT = "/tmp/oc-plugin-query.py"
+const DEBUG = !!process.env.OPENCODE_MEMPALACE_DEBUG
 const LOG_FILE = "/tmp/opencode-mempalace.log"
 
 function log(msg: string) {
+  if (!DEBUG) return
   const ts = new Date().toISOString()
   try { appendFileSync(LOG_FILE, `[${ts}] ${msg}\n`) } catch {}
 }
