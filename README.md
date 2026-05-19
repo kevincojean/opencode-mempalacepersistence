@@ -209,6 +209,36 @@ When set, the plugin writes a debug log to `/tmp/opencode-mempalace.log`.
 
 ---
 
+## Recommendations
+
+### Model choice affects memory retrieval reliability
+
+Empirical data from the MemPalace community (Cat-9a diagnostic) shows that the model's tool-use discipline significantly impacts how reliably `mempalace_search` is invoked:
+
+| Model | Skips search | Mean recall |
+|-------|:-:|:-:|
+| gemma4:e4b (4B) | **60%** | 0.417 |
+| qwen3.5:4b (4B, Tau2-tuned) | **13%** | 0.717 |
+
+For reliable read-side memory retrieval, **Qwen 3.5 4B+ or equivalent** is recommended as the minimum orchestrator. Smaller or older models may skip memory search on most questions regardless of AGENTS.md instructions.
+
+### Forced invocation (belt and suspenders)
+
+A plugin-level config flag that injects a mandatory `mempalace_search` directive into the system prompt (on top of AGENTS.md) can recover ~15pp of recall on low-discipline models. This is being evaluated as a future config option — suggestions welcome.
+
+### Complementary: upstream OpenCode source adapter
+
+The MemPalace project has an upstream PR ([#1484](https://github.com/MemPalace/mempalace/pull/1484)) adding `mempalace mine --source opencode` — a pull-based adapter for retrospective ingest of existing OpenCode sessions. This plugin (push, real-time) and the adapter (pull, backfill) are complementary:
+
+| Approach | Direction | Captures |
+|----------|-----------|----------|
+| This plugin | Push | Live conversation turns |
+| `mempalace mine --source opencode` (PR #1484) | Pull | Existing OpenCode session files |
+
+For full coverage: install this plugin for live capture, run `mempalace mine --source opencode` once for backfill, never think about it again.
+
+---
+
 ## License
 
 MIT
