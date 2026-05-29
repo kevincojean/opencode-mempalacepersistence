@@ -1,7 +1,7 @@
 {
   "name": "opencode-mempalace-persistence",
-  "version": "1.0.1",
-  "description": "OpenCode plugin — auto-sync conversations to MemPalace memory in real-time with auto-categorization and Knowledge Graph",
+  "version": "1.1.0",
+  "description": "OpenCode plugin — auto-sync conversations to MemPalace memory in real-time. No forced wings, KG extraction via MCP tools.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": ["dist"],
