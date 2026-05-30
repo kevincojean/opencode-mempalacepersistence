@@ -1,8 +1,8 @@
 # opencode-mempalace-persistence
 
-An OpenCode plugin that automatically saves every conversation to MemPalace and uses stored memory to provide better, context-aware responses. Real-time, zero cron, zero external scripts.
+> **Community plugin** — not officially maintained by the MemPalace team. Fully open source, ~120 lines of TypeScript.
 
-> **It just works** — install, use OpenCode, the plugin handles the rest.
+An OpenCode plugin that automatically saves every conversation to MemPalace and uses stored memory to provide better, context-aware responses. Real-time, zero cron, zero external scripts.
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
