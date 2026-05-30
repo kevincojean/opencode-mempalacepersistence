@@ -1,15 +1,23 @@
 {
   "name": "opencode-mempalace-persistence",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "OpenCode plugin — auto-sync conversations to MemPalace memory in real-time. No forced wings, KG extraction via MCP tools.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build"
   },
-  "keywords": ["opencode", "mempalace", "memory", "opencode-plugin", "typescript"],
+  "keywords": [
+    "opencode",
+    "mempalace",
+    "memory",
+    "opencode-plugin",
+    "typescript"
+  ],
   "author": "geco",
   "license": "MIT",
   "type": "module",
