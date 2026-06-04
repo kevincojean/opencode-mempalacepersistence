@@ -294,21 +294,6 @@ When set, the plugin writes a debug log to `/tmp/opencode-mempalace.log`.
 
 ---
 
-## Recommendations
-
-### Complementary: upstream OpenCode source adapter
-
-The MemPalace project has an upstream PR ([#1484](https://github.com/MemPalace/mempalace/pull/1484)) adding `mempalace mine --source opencode` — a pull-based adapter for retrospective ingest of existing OpenCode sessions. This plugin (push, real-time) and the adapter (pull, backfill) are complementary:
-
-| Approach | Direction | Captures |
-|----------|-----------|----------|
-| This plugin | Push | Live conversation turns |
-| `mempalace mine --source opencode` (PR #1484) | Pull | Existing OpenCode session files |
-
-For full coverage: install this plugin for live capture, run `mempalace mine --source opencode` once for backfill, never think about it again.
-
----
-
 ## License
 
 MIT
