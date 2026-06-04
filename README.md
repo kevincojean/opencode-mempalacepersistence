@@ -1,6 +1,6 @@
 # opencode-mempalace-persistence
 
-> **Community plugin** — not officially maintained by the MemPalace team. Fully open source, ~120 lines of TypeScript.
+> **Community plugin** — not officially maintained by the MemPalace team. Fully open source, ~200 lines of TypeScript.
 
 An OpenCode plugin that automatically saves every conversation to MemPalace and uses stored memory to provide better, context-aware responses. Real-time, zero cron, zero external scripts.
 
@@ -104,7 +104,47 @@ This is loaded automatically at session start via `instructions` in opencode.jso
 }
 ```
 
-### 5. MemPalace (if not already installed)
+### 5. (Optional) Auto-inject memory context
+
+By default, the model must search MemPalace on its own via AGENTS.md instructions. For models with poor tool-use discipline, enable auto-injection — the plugin injects identity + relevant memories directly into the prompt:
+
+```json
+{
+  "plugin": ["opencode-mempalace-persistence"],
+  "mempalace": {
+    "autoInjectContext": true
+  }
+}
+```
+
+When enabled, on every user message:
+- **First message**: Injects your identity from `~/.mempalace/identity.txt`
+- **Every message**: Runs `mempalace search` and injects relevant results
+
+The context is guaranteed regardless of model discipline. Since the plugin handles search and identity injection, you can simplify AGENTS.md — keep only the Knowledge Graph management steps:
+
+```markdown
+# Memory & Knowledge instructions
+
+### Step 1 — Query Knowledge Graph
+Call `mempalace_mempalace_kg_query` for entity "user" to retrieve relevant facts.
+
+### Step 2 — Record Knowledge Graph facts
+After responding, call `mempalace_mempalace_kg_add` for any new facts found.
+```
+
+And remove `"~/.mempalace/identity.txt"` from `instructions` in your opencode.json — the plugin injects it automatically.
+
+**Summary: with vs without autoInjectContext**
+
+| Feature | Without (default) | With `autoInjectContext: true` |
+|---------|:-:|:-:|
+| Memory search | Model calls `mempalace_search` (AGENTS.md) | Plugin injects automatically |
+| Identity | `instructions: ["identity.txt"]` | Plugin injects automatically |
+| AGENTS.md needed | Full (search + KG + identity) | Minimal (KG management only) |
+| Depends on model discipline | Yes | No |
+
+### 6. MemPalace (if not already installed)
 
 ```bash
 # Install (requires mempalace>=3.3.5 for HNSW corruption fix)
