@@ -10,10 +10,14 @@ const VENV_PYTHON = join(HOME, ".local/share/pipx/venvs/mempalace/bin/python3")
 const MEMPALACE_BIN = join(HOME, ".local/bin/mempalace")
 const OPENCODE_DB = join(HOME, ".local/share/opencode/opencode.db")
 const STATE_FILE = join(HOME, ".mempalace/sync_state.json")
+const OPENCODE_CONFIG = join(HOME, ".config/opencode/opencode.json")
+const IDENTITY_FILE = join(HOME, ".mempalace/identity.txt")
 const OUT_DIR = "/tmp/oc-sessions"
 const TMP_SCRIPT = "/tmp/oc-plugin-query.py"
 const DEBUG = !!process.env.OPENCODE_MEMPALACE_DEBUG
 const LOG_FILE = "/tmp/opencode-mempalace.log"
+const MAX_INJECT_CHARS = 900
+const MAX_SEARCH_RESULTS = 3
 
 function log(msg: string) {
   if (!DEBUG) return
@@ -23,6 +27,7 @@ function log(msg: string) {
 
 let miningLock = false
 let lastSyncTs = 0
+let wakeupDone = false
 
 function runPython(code: string): string {
   writeFileSync(TMP_SCRIPT, code)
@@ -38,6 +43,34 @@ function hasText(parts: any[]): string {
     .filter((p: any) => p?.type === "text" && p?.text?.trim())
     .map((p: any) => p.text.trim())
     .join("\n")
+}
+
+function isAutoInjectEnabled(): boolean {
+  try {
+    const raw = readFileSync(OPENCODE_CONFIG, "utf-8")
+    const cfg = JSON.parse(raw)
+    return !!(cfg as any)?.mempalace?.autoInjectContext
+  } catch {
+    return false
+  }
+}
+
+function readIdentity(): string {
+  if (!existsSync(IDENTITY_FILE)) return ""
+  try { return readFileSync(IDENTITY_FILE, "utf-8").trim() } catch { return "" }
+}
+
+function mempalaceSearch(query: string): string {
+  try {
+    const out = execSync(`${MEMPALACE_BIN} search "${query.replace(/"/g, '\\"')}" --results ${MAX_SEARCH_RESULTS}`, {
+      encoding: "utf-8",
+      timeout: 15000,
+    }).trim()
+    if (!out || out.includes("No results")) return ""
+    return out.slice(0, MAX_INJECT_CHARS)
+  } catch {
+    return ""
+  }
 }
 
 function getLastSync(): number {
@@ -156,7 +189,9 @@ print(json.dumps(texts))
 
 export default (async () => {
   mkdirSync(OUT_DIR, { recursive: true })
-  log("loaded")
+  const autoInject = isAutoInjectEnabled()
+  const identity = readIdentity()
+  log(`loaded (autoInjectContext: ${autoInject})`)
 
   return {
     "chat.message": async (_input, output) => {
@@ -166,6 +201,46 @@ export default (async () => {
       if (!text) return
       log("user msg - queue sync")
       setTimeout(() => dbSync(), 500)
+    },
+
+    "experimental.chat.messages.transform": async (_input, output) => {
+      if (!autoInject) return
+      if (!output?.messages?.length) return
+
+      const lastUser = [...output.messages].reverse().find((m: any) => m.info?.role === "user")
+      if (!lastUser) return
+
+      const query = hasText(lastUser.parts || [])
+      if (!query) return
+
+      const injectParts: any[] = []
+
+      if (!wakeupDone) {
+        wakeupDone = true
+        if (identity) {
+          injectParts.push({
+            id: `mp-identity-${Date.now()}`,
+            type: "text",
+            synthetic: true,
+            text: `[MemPalace Identity]\n${identity}\n[/MemPalace Identity]`,
+          })
+        }
+      }
+
+      const memories = mempalaceSearch(query)
+      if (memories) {
+        injectParts.push({
+          id: `mp-recall-${Date.now()}`,
+          type: "text",
+          synthetic: true,
+          text: `[MemPalace Recall]\n${memories}\n[/MemPalace Recall]`,
+        })
+      }
+
+      if (injectParts.length > 0) {
+        lastUser.parts.push(...injectParts)
+        log(`injected ${injectParts.length} context blocks`)
+      }
     },
 
     event: async ({ event }: any) => {
