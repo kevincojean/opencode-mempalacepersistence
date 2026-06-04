@@ -10,7 +10,7 @@ const VENV_PYTHON = join(HOME, ".local/share/pipx/venvs/mempalace/bin/python3")
 const MEMPALACE_BIN = join(HOME, ".local/bin/mempalace")
 const OPENCODE_DB = join(HOME, ".local/share/opencode/opencode.db")
 const STATE_FILE = join(HOME, ".mempalace/sync_state.json")
-const OPENCODE_CONFIG = join(HOME, ".config/opencode/opencode.json")
+const PLUGIN_CONFIG = join(HOME, ".mempalace/plugin-config.json")
 const IDENTITY_FILE = join(HOME, ".mempalace/identity.txt")
 const OUT_DIR = "/tmp/oc-sessions"
 const TMP_SCRIPT = "/tmp/oc-plugin-query.py"
@@ -47,9 +47,8 @@ function hasText(parts: any[]): string {
 
 function isAutoInjectEnabled(): boolean {
   try {
-    const raw = readFileSync(OPENCODE_CONFIG, "utf-8")
-    const cfg = JSON.parse(raw)
-    return !!(cfg as any)?.mempalace?.autoInjectContext
+    const raw = readFileSync(PLUGIN_CONFIG, "utf-8")
+    return !!(JSON.parse(raw) as any)?.autoInjectContext
   } catch {
     return false
   }
