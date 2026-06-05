@@ -61,8 +61,6 @@ The `mempalace mcp` command gives you the exact MCP setup string for your config
 
 ### 4. Memory injection (recommended)
 
-> **Starting from v1.4.0, `autoInjectContext` will default to `true` — this will be the only behavior.**
-
 The plugin automatically injects your identity + relevant memories from MemPalace into every prompt. No model discipline required.
 
 Create `~/.mempalace/plugin-config.json`:
