@@ -238,6 +238,7 @@ function runMineSync(filePath: string, buildWingFlag: () => string): { success: 
       timeout: 3000,
       killSignal: "SIGKILL",
       env: execEnv,
+      stdio: "pipe"
     })
     log("mine success")
     return { success: true, retry: false }
