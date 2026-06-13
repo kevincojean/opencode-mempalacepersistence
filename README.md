@@ -74,7 +74,7 @@ Create `~/.mempalace/plugin-config.json`:
 **Do NOT put this in `opencode.json`** — OpenCode's schema validation rejects unknown keys. The plugin reads its config from `~/.mempalace/plugin-config.json` instead.
 
 When enabled:
-- **First message**: Injects `[MemPalace Identity]` from `~/.mempalace/identity.txt` + `[MemPalace L1]` from `mempalace wake-up` (project goals, architecture, current tasks from L1 files)
+- **First message**: Injects `[MemPalace Identity]` from `~/.mempalace/identity.txt` + `[MemPalace L1]` (or `[MemPalace L1 : <wing>]` when wing-scoped) from `mempalace wake-up` (project goals, architecture, current tasks from L1 files)
 - **Every message**: Runs `mempalace search` and injects results as `[MemPalace Recall]`
 
 #### Advanced configuration
@@ -220,7 +220,7 @@ The `mempalace mcp` command gives you the exact MCP setup string for your config
 ```
 You ask a question
   → Plugin hooks into `chat.message`
-  → First message: injects [MemPalace Identity] + [MemPalace L1] (project context from `mempalace wake-up`)
+  → First message: injects [MemPalace Identity] + [MemPalace L1] or [MemPalace L1 : <wing>] (project context from `mempalace wake-up`)
   → Every message: runs `mempalace search` → injects [MemPalace Recall]
   → If scopeSearchToWing is true, all mempalace commands are scoped to wing_<project> (--wing flag)
   → Model sees context without having to search
@@ -252,7 +252,8 @@ Every turn (question + answer) is saved as a drawer in MemPalace. No forced cate
   User msg ─────►│  chat.message hook            │
                  │    ↓                          │
                  │  First: [MemPalace Identity]  │
-                 │       + [MemPalace L1]        │
+                 │       + [MemPalace L1] /       │
+│         [MemPalace L1 : <wing>]│
                  │    ↓                          │
                  │  Always: [MemPalace Recall]   │
                  │  (autoInjectContext: true)    │

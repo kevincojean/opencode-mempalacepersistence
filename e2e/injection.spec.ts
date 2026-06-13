@@ -20,9 +20,10 @@ function buildRecallBlock(text: string, maxChars = 900): string {
   return `[MemPalace Recall]\n${truncated}\n[/MemPalace Recall]`
 }
 
-function buildL1Block(text: string, maxChars = 900): string {
+function buildL1Block(text: string, maxChars = 900, wing?: string): string {
   const truncated = text.slice(0, maxChars)
-  return `[MemPalace L1]\n${truncated}\n[/MemPalace L1]`
+  const title = wing ? `[MemPalace L1 : ${wing}]` : `[MemPalace L1]`
+  return `${title}\n${truncated}\n[/MemPalace L1]`
 }
 
 /**
@@ -37,6 +38,8 @@ function applyChatMessage(
   wakeupDone: boolean,
   searchResult: string,
   wakeUpResult = "",
+  scopeSearchToWing = false,
+  currentWing = "",
 ): { parts: any[]; wakeupDone: boolean } {
   if (!autoInject) return { parts, wakeupDone }
 
@@ -49,7 +52,8 @@ function applyChatMessage(
       prefixBlocks.push(buildIdentityBlock(identity))
     }
     if (wakeUpResult) {
-      prefixBlocks.push(buildL1Block(wakeUpResult))
+      const wing = scopeSearchToWing ? currentWing : undefined
+      prefixBlocks.push(buildL1Block(wakeUpResult, 900, wing))
     }
   }
 
@@ -126,6 +130,20 @@ describe("Identity injection @injection", () => {
     expect(text).toContain("[MemPalace L1]")
     expect(text).toContain("Project context here")
     expect(text).toContain("I am Dehi.")
+    expect(text.endsWith("What's the project about?")).toBe(true)
+    expect(result.wakeupDone).toBe(true)
+  })
+
+  it("injects wing-scoped L1 title when scopeSearchToWing is true", () => {
+    const parts = [{ type: "text", text: "What's the project about?" }]
+
+    const result = applyChatMessage(parts, "I am Dehi.", true, false, "", "# L1 — Wing context", true, "wing_my-project")
+
+    const text = result.parts[0].text
+    expect(text).toContain("[MemPalace L1 : wing_my-project]")
+    expect(text).not.toContain("[MemPalace L1]\n")
+    expect(text).toContain("Wing context")
+    expect(text).toContain("[MemPalace Identity]")
     expect(text.endsWith("What's the project about?")).toBe(true)
     expect(result.wakeupDone).toBe(true)
   })
@@ -256,6 +274,19 @@ function testBuildWingFlag(scoped: boolean, wing: string): string {
 }
 
 describe("Wing-scoped search and L2 @search @config", () => {
+  let configTmpDir: string
+  let configPath: string
+
+  beforeAll(async () => {
+    configTmpDir = join(tmpdir(), `mp-wing-test-${randomUUID().slice(0, 8)}`)
+    await mkdir(configTmpDir, { recursive: true })
+    configPath = join(configTmpDir, "plugin-config.json")
+    await writeFile(configPath, JSON.stringify({ autoInjectContext: true }), "utf-8")
+  })
+
+  afterAll(async () => {
+    await rm(configTmpDir, { recursive: true, force: true })
+  })
   it("returns wing_general for empty path", () => {
     expect(testGetWingFromPath("")).toBe("wing_general")
   })
@@ -290,18 +321,12 @@ describe("Wing-scoped search and L2 @search @config", () => {
 
   it("scopeSearchToWing config defaults to false when not configured", async () => {
     const { existsSync, readFileSync } = await import("fs")
-    const configPath = process.env.MEMPALACE_PLUGIN_CONFIG ?? join(
-      process.env.HOME ?? "/tmp",
-      ".mempalace/plugin-config.json",
-    )
     let scopeValue = false
     if (existsSync(configPath)) {
-      try {
-        const raw = JSON.parse(readFileSync(configPath, "utf-8"))
-        if (typeof raw?.scopeSearchToWing === "boolean") {
-          scopeValue = raw.scopeSearchToWing
-        }
-      } catch { /* use default */ }
+      const raw = JSON.parse(readFileSync(configPath, "utf-8"))
+      if (typeof raw?.scopeSearchToWing === "boolean") {
+        scopeValue = raw.scopeSearchToWing
+      }
     }
     expect(scopeValue).toBe(false)
   })

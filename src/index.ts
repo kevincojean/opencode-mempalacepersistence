@@ -449,7 +449,8 @@ export default (async (input: any) => {
           }
           const wakeUp = mempalaceWakeUp()
           if (wakeUp) {
-            prefixTexts.push(`[MemPalace L1]\n${wakeUp}\n[/MemPalace L1]`)
+            const l1Title = scopeSearchToWing && currentWing ? `[MemPalace L1 : ${currentWing}]` : `[MemPalace L1]`
+            prefixTexts.push(`${l1Title}\n${wakeUp}\n[/MemPalace L1]`)
           }
         }
         const memories = mempalaceSearch(text)
