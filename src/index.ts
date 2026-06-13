@@ -15,10 +15,12 @@ const OUT_DIR = "/tmp/oc-sessions"
 const TMP_SCRIPT = "/tmp/oc-plugin-query.py"
 const DEBUG = !!process.env.OPENCODE_MEMPALACE_DEBUG
 const LOG_FILE = "/tmp/opencode-mempalace.log"
-const MAX_INJECT_CHARS = 900
-const MAX_SEARCH_RESULTS = 3
-const SEARCH_DEBOUNCE_MS = 3000
-const MIN_QUERY_LENGTH = 15
+// Configurable defaults (overridable via plugin-config.json)
+let maxSearchChars = 900
+let maxWakeUpChars = 900
+let maxSearchResults = 3
+let searchDebounceMs = 3000
+let minQueryLength = 15
 
 function log(msg: string) {
   if (!DEBUG) return
@@ -28,6 +30,7 @@ function log(msg: string) {
 
 let miningLock = false
 let wakeupDone = false
+let wakeUpCache: string | null = null
 let showToast: ((msg: string, variant?: "info" | "success" | "error") => void) | null = null
 let lastSearchTs = 0
 let lastSearchResult = ""
@@ -64,19 +67,38 @@ function readIdentity(): string {
 
 function mempalaceSearch(query: string): string {
   const now = Date.now()
-  if (query.trim().length < MIN_QUERY_LENGTH) return ""
-  if (now - lastSearchTs < SEARCH_DEBOUNCE_MS) return lastSearchResult
+  if (query.trim().length < minQueryLength) return ""
+  if (now - lastSearchTs < searchDebounceMs) return lastSearchResult
   lastSearchTs = now
   try {
-    const out = execSync(`${MEMPALACE_BIN} search "${query.replace(/"/g, '\\"')}" --results ${MAX_SEARCH_RESULTS}`, {
+    const out = execSync(`${MEMPALACE_BIN} search "${query.replace(/"/g, '\\"')}" --results ${maxSearchResults}`, {
       encoding: "utf-8",
       timeout: 15000,
     }).trim()
     if (!out || out.includes("No results")) { lastSearchResult = ""; return "" }
-    lastSearchResult = out.slice(0, MAX_INJECT_CHARS)
+    lastSearchResult = out.slice(0, maxSearchChars)
     return lastSearchResult
   } catch {
     lastSearchResult = ""
+    return ""
+  }
+}
+
+function mempalaceWakeUp(): string {
+  if (wakeUpCache !== null) return wakeUpCache
+  try {
+    const out = execSync(`${MEMPALACE_BIN} wake-up`, {
+      encoding: "utf-8",
+      timeout: 15000,
+    }).trim()
+    if (!out || out.startsWith("No palace")) { wakeUpCache = ""; return "" }
+    // Strip the Wake-up header and L0 identity portion — keep only L1+ sections
+    const l1Index = out.indexOf("\n## L1")
+    wakeUpCache = l1Index >= 0 ? out.slice(l1Index + 1) : out
+    wakeUpCache = wakeUpCache.slice(0, maxWakeUpChars)
+    return wakeUpCache
+  } catch {
+    wakeUpCache = ""
     return ""
   }
 }
@@ -158,6 +180,14 @@ export default (async (input: any) => {
   mkdirSync(OUT_DIR, { recursive: true })
   const autoInject = isAutoInjectEnabled()
   const identity = readIdentity()
+  try {
+    const raw = JSON.parse(readFileSync(PLUGIN_CONFIG, "utf-8"))
+    if (typeof raw?.maxMempalaceSearchChars === "number" && raw.maxMempalaceSearchChars > 0) maxSearchChars = raw.maxMempalaceSearchChars
+    if (typeof raw?.maxWakeUpChars === "number" && raw.maxWakeUpChars > 0) maxWakeUpChars = raw.maxWakeUpChars
+    if (typeof raw?.maxSearchResults === "number" && raw.maxSearchResults > 0) maxSearchResults = raw.maxSearchResults
+    if (typeof raw?.searchDebounceMs === "number" && raw.searchDebounceMs > 0) searchDebounceMs = raw.searchDebounceMs
+    if (typeof raw?.minQueryLength === "number" && raw.minQueryLength > 0) minQueryLength = raw.minQueryLength
+  } catch {}
 
   try {
     if (input?.client?.tui?.showToast) {
@@ -168,64 +198,52 @@ export default (async (input: any) => {
     }
   } catch (e) {}
 
-  log(`loaded (autoInjectContext: ${autoInject})`)
+  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${maxSearchChars}, maxWakeUpChars: ${maxWakeUpChars}, maxSearchResults: ${maxSearchResults}, searchDebounceMs: ${searchDebounceMs}, minQueryLength: ${minQueryLength})`)
 
   return {
     "chat.message": async (input: any, output: any) => {
-      const role = (output.message as any).role
+      const role = (output.message as any)?.role
       if (role !== "user") return
       const text = hasText(output.parts || [])
       if (!text) return
       const sessionId = input?.sessionID
+
+      // --- L0 (identity) + L1 (wake-up) + query recall injection ---
+      if (autoInject) {
+        const prefixTexts: string[] = []
+
+        if (!wakeupDone) {
+          wakeupDone = true
+          if (identity) {
+            prefixTexts.push(`[MemPalace Identity]\n${identity}\n[/MemPalace Identity]`)
+          }
+          // L1 — project context from mempalace wake-up (once per session, cached)
+          const wakeUp = mempalaceWakeUp()
+          if (wakeUp) {
+            prefixTexts.push(`[MemPalace L1]\n${wakeUp}\n[/MemPalace L1]`)
+          }
+        }
+
+        const memories = mempalaceSearch(text)
+        if (memories) {
+          prefixTexts.push(`[MemPalace Recall]\n${memories}\n[/MemPalace Recall]`)
+        }
+
+        if (prefixTexts.length > 0) {
+          firstTextPart: for (const part of output.parts) {
+            if (part?.type === "text" && typeof part.text === "string") {
+              part.text = prefixTexts.join("\n\n") + "\n\n" + part.text
+              break firstTextPart
+            }
+          }
+          log(`injected ${prefixTexts.length} context blocks`)
+        }
+      }
+
+      // --- Mining ---
       if (!sessionId) { log("user msg - no sessionId, skipping mine"); return }
       log(`user msg - mine session ${sessionId}`)
       setTimeout(() => mineSingleSession(sessionId), 2000)
-    },
-
-    "experimental.chat.messages.transform": async (_input: any, output: any) => {
-      if (!autoInject) return
-      if (!output?.messages?.length) return
-
-      const lastUser = [...output.messages].reverse().find((m: any) => m.info?.role === "user")
-      if (!lastUser) return
-
-      const query = hasText(lastUser.parts || [])
-      if (!query) return
-
-      const injectParts: any[] = []
-
-      if (!wakeupDone) {
-        wakeupDone = true
-        if (identity) {
-          injectParts.push({
-            id: `mp-identity-${Date.now()}`,
-            type: "text",
-            synthetic: true,
-            text: `[MemPalace Identity]\n${identity}\n[/MemPalace Identity]`,
-          })
-        }
-      }
-
-      const memories = mempalaceSearch(query)
-      if (memories) {
-        injectParts.push({
-          id: `mp-recall-${Date.now()}`,
-          type: "text",
-          synthetic: true,
-          text: `[MemPalace Recall]\n${memories}\n[/MemPalace Recall]`,
-        })
-      }
-
-      if (injectParts.length > 0) {
-        lastUser.parts.push(...injectParts)
-        log(`injected ${injectParts.length} context blocks`)
-        if (showToast) {
-          const parts: string[] = []
-          if (injectParts.some(p => String(p.id || "").startsWith("mp-identity"))) parts.push("identité")
-          if (injectParts.some(p => String(p.id || "").startsWith("mp-recall"))) parts.push("mémoire")
-          showToast(`Injection: ${parts.join(" + ")}`)
-        }
-      }
     },
 
     event: async ({ event }: any) => {

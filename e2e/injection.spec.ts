@@ -5,79 +5,68 @@ import { tmpdir } from "os"
 import { randomUUID } from "crypto"
 
 // ---------------------------------------------------------------------------
-// We test the plugin's injection logic directly rather than via opencode
-// export, because opencode persists original (un-transformed) messages to
-// its database. The synthetic parts the plugin adds via
-// experimental.chat.messages.transform live in the in-memory copy sent to
-// the model and do not appear in `opencode export`.
+// We test the plugin's injection logic directly rather than loading the
+// full plugin module (which has Node.js child_process side-effects).
+// The injection runs in the chat.message hook which modifies output.parts
+// before the message is displayed in the UI.
 // ---------------------------------------------------------------------------
 
-/**
- * Replicate the relevant injection logic from src/index.ts so we can
- * assert behaviour without loading the full plugin module (which has
- * Node.js child_process side-effects that are irrelevant here).
- */
-function hasText(parts: any[]): string {
-  return parts
-    .filter((p: any) => p?.type === "text" && p?.text?.trim())
-    .map((p: any) => p.text.trim())
-    .join("\n")
+function buildIdentityBlock(identity: string): string {
+  return `[MemPalace Identity]\n${identity}\n[/MemPalace Identity]`
 }
 
-function buildIdentityPart(identity: string) {
-  return {
-    id: `mp-identity-${Date.now()}`,
-    type: "text",
-    synthetic: true,
-    text: `[MemPalace Identity]\n${identity}\n[/MemPalace Identity]`,
-  }
-}
-
-function buildRecallPart(text: string, maxChars = 900) {
+function buildRecallBlock(text: string, maxChars = 900): string {
   const truncated = text.slice(0, maxChars)
-  return {
-    id: `mp-recall-${Date.now()}`,
-    type: "text",
-    synthetic: true,
-    text: `[MemPalace Recall]\n${truncated}\n[/MemPalace Recall]`,
-  }
+  return `[MemPalace Recall]\n${truncated}\n[/MemPalace Recall]`
 }
 
-function applyTransform(
-  messages: any[],
+function buildL1Block(text: string, maxChars = 900): string {
+  const truncated = text.slice(0, maxChars)
+  return `[MemPalace L1]\n${truncated}\n[/MemPalace L1]`
+}
+
+/**
+ * Simulate the chat.message hook logic from src/index.ts.
+ * The real hook receives output.parts — this function replicates the
+ * injection part in isolation.
+ */
+function applyChatMessage(
+  parts: any[],
   identity: string,
   autoInject: boolean,
   wakeupDone: boolean,
   searchResult: string,
-): { messages: any[]; wakeupDone: boolean } {
-  if (!autoInject) return { messages, wakeupDone }
-  if (!messages.length) return { messages, wakeupDone }
+  wakeUpResult = "",
+): { parts: any[]; wakeupDone: boolean } {
+  if (!autoInject) return { parts, wakeupDone }
 
-  const lastUser = [...messages].reverse().find((m: any) => m.info?.role === "user")
-  if (!lastUser) return { messages, wakeupDone }
-
-  const query = hasText(lastUser.parts || [])
-  if (!query) return { messages, wakeupDone }
-
-  const injectParts: any[] = []
+  const prefixBlocks: string[] = []
 
   let newWakeupDone = wakeupDone
   if (!newWakeupDone) {
     newWakeupDone = true
     if (identity) {
-      injectParts.push(buildIdentityPart(identity))
+      prefixBlocks.push(buildIdentityBlock(identity))
+    }
+    if (wakeUpResult) {
+      prefixBlocks.push(buildL1Block(wakeUpResult))
     }
   }
 
   if (searchResult) {
-    injectParts.push(buildRecallPart(searchResult))
+    prefixBlocks.push(buildRecallBlock(searchResult))
   }
 
-  if (injectParts.length > 0) {
-    lastUser.parts.push(...injectParts)
+  if (prefixBlocks.length > 0) {
+    firstTextPart: for (const part of parts) {
+      if (part?.type === "text" && typeof part.text === "string") {
+        part.text = prefixBlocks.join("\n\n") + "\n\n" + part.text
+        break firstTextPart
+      }
+    }
   }
 
-  return { messages, wakeupDone: newWakeupDone }
+  return { parts, wakeupDone: newWakeupDone }
 }
 
 // ---------------------------------------------------------------------------
@@ -85,73 +74,59 @@ function applyTransform(
 // ---------------------------------------------------------------------------
 
 describe("Identity injection @injection", () => {
-  it("injects a synthetic [MemPalace Identity] part on the first user message", () => {
-    const messages = [
-      {
-        info: { role: "user" },
-        parts: [{ type: "text", text: "What is my identity?" }],
-      },
-    ]
+  it("injects visible [MemPalace Identity] text on the first user message", () => {
+    const parts = [{ type: "text", text: "What is my identity?" }]
 
-    const result = applyTransform(messages, "I am Test User.", true, false, "")
+    const result = applyChatMessage(parts, "I am Test User.", true, false, "")
 
-    const userMsg = result.messages[0]
-    expect(userMsg.parts.length).toBe(2)
-
-    const identityPart = userMsg.parts[1]
-    expect(identityPart.type).toBe("text")
-    expect(identityPart.synthetic).toBe(true)
-    expect(identityPart.text).toContain("[MemPalace Identity]")
-    expect(identityPart.text).toContain("I am Test User.")
-
+    expect(result.parts.length).toBe(1)
+    const text = result.parts[0].text
+    expect(text.startsWith("[MemPalace Identity]")).toBe(true)
+    expect(text).toContain("I am Test User.")
+    expect(text.endsWith("What is my identity?")).toBe(true)
     expect(result.wakeupDone).toBe(true)
   })
 
-  it("only injects identity once when wakeupDone is already true", () => {
-    const messages = [
-      {
-        info: { role: "user" },
-        parts: [{ type: "text", text: "Tell me more." }],
-      },
-    ]
+  it("only injects identity and L1 once when wakeupDone is already true", () => {
+    const parts = [{ type: "text", text: "Tell me more." }]
 
-    const result = applyTransform(messages, "I am Test User.", true, true, "")
+    const result = applyChatMessage(parts, "I am Test User.", true, true, "", "L1 content")
 
-    const userMsg = result.messages[0]
-    const identityParts = userMsg.parts.filter(
-      (p: any) => typeof p.text === "string" && p.text.includes("[MemPalace Identity]"),
-    )
-    expect(identityParts.length).toBe(0)
+    expect(result.parts[0].text).not.toContain("[MemPalace Identity]")
+    expect(result.parts[0].text).not.toContain("[MemPalace L1]")
+    expect(result.parts[0].text).toBe("Tell me more.")
     expect(result.wakeupDone).toBe(true)
   })
 
   it("does not inject identity when autoInject is false", () => {
-    const messages = [
-      {
-        info: { role: "user" },
-        parts: [{ type: "text", text: "Who am I?" }],
-      },
-    ]
+    const parts = [{ type: "text", text: "Who am I?" }]
 
-    const result = applyTransform(messages, "I am Test User.", false, false, "")
+    const result = applyChatMessage(parts, "I am Test User.", false, false, "")
 
-    const userMsg = result.messages[0]
-    expect(userMsg.parts.length).toBe(1)
+    expect(result.parts.length).toBe(1)
     expect(result.wakeupDone).toBe(false)
   })
 
   it("does not inject identity when identity string is empty", () => {
-    const messages = [
-      {
-        info: { role: "user" },
-        parts: [{ type: "text", text: "Who am I?" }],
-      },
-    ]
+    const parts = [{ type: "text", text: "Who am I?" }]
 
-    const result = applyTransform(messages, "", true, false, "")
+    const result = applyChatMessage(parts, "", true, false, "")
 
-    const userMsg = result.messages[0]
-    expect(userMsg.parts.length).toBe(1)
+    expect(result.parts.length).toBe(1)
+    expect(result.wakeupDone).toBe(true)
+  })
+
+  it("injects L1 wake-up context alongside identity on first message", () => {
+    const parts = [{ type: "text", text: "What's the project about?" }]
+
+    const result = applyChatMessage(parts, "I am Dehi.", true, false, "", "# L1 — Project context here")
+
+    const text = result.parts[0].text
+    expect(text.startsWith("[MemPalace Identity]")).toBe(true)
+    expect(text).toContain("[MemPalace L1]")
+    expect(text).toContain("Project context here")
+    expect(text).toContain("I am Dehi.")
+    expect(text.endsWith("What's the project about?")).toBe(true)
     expect(result.wakeupDone).toBe(true)
   })
 })
@@ -161,54 +136,33 @@ describe("Identity injection @injection", () => {
 // ---------------------------------------------------------------------------
 
 describe("Memory search and injection @injection @search", () => {
-  it("injects a [MemPalace Recall] block when search results exist", () => {
-    const messages = [
-      {
-        info: { role: "user" },
-        parts: [{ type: "text", text: "What do you remember about me?" }],
-      },
-    ]
+  it("injects [MemPalace Recall] text when search results exist", () => {
+    const parts = [{ type: "text", text: "What do you remember about me?" }]
 
-    const result = applyTransform(
-      messages,
-      "I am Test User.",
-      true,
-      true,
-      "User likes blue and works on E2E testing.",
-    )
+    const result = applyChatMessage(parts, "I am Test User.", true, true, "User likes blue and works on E2E testing.")
 
-    const userMsg = result.messages[0]
-    const recallParts = userMsg.parts.filter(
-      (p: any) => typeof p.text === "string" && p.text.includes("[MemPalace Recall]"),
-    )
-    expect(recallParts.length).toBe(1)
-    expect(recallParts[0].text).toContain("User likes blue")
+    const text = result.parts[0].text
+    expect(text).toContain("[MemPalace Recall]")
+    expect(text).toContain("User likes blue")
+    expect(text).toContain("What do you remember about me?")
   })
 
   it("truncates recall text to 900 characters", () => {
     const longRecall = "x".repeat(2000)
 
-    const part = buildRecallPart(longRecall, 900)
-    const match = part.text.match(/\[MemPalace Recall\]\n([\s\S]*)\n\[\/MemPalace Recall\]/)
+    const block = buildRecallBlock(longRecall, 900)
+    const match = block.match(/\[MemPalace Recall\]\n([\s\S]*)\n\[\/MemPalace Recall\]/)
     expect(match).not.toBeNull()
     expect(match![1].length).toBe(900)
   })
 
   it("does not inject recall when search result is empty", () => {
-    const messages = [
-      {
-        info: { role: "user" },
-        parts: [{ type: "text", text: "Any memories?" }],
-      },
-    ]
+    const parts = [{ type: "text", text: "Any memories?" }]
 
-    const result = applyTransform(messages, "I am Test User.", true, true, "")
+    const result = applyChatMessage(parts, "I am Test User.", true, true, "")
 
-    const userMsg = result.messages[0]
-    const recallParts = userMsg.parts.filter(
-      (p: any) => typeof p.text === "string" && p.text.includes("[MemPalace Recall]"),
-    )
-    expect(recallParts.length).toBe(0)
+    expect(result.parts[0].text).not.toContain("[MemPalace Recall]")
+    expect(result.parts[0].text).toBe("Any memories?")
   })
 })
 
@@ -218,30 +172,16 @@ describe("Memory search and injection @injection @search", () => {
 
 describe("Short message skips search @injection @search", () => {
   it("injects identity but skips recall for messages under 15 characters", () => {
-    const messages = [
-      {
-        info: { role: "user" },
-        parts: [{ type: "text", text: "Hi" }],
-      },
-    ]
+    const parts = [{ type: "text", text: "Hi" }]
 
-    const result = applyTransform(messages, "I am Test User.", true, false, "")
+    const result = applyChatMessage(parts, "I am Test User.", true, false, "")
 
-    const userMsg = result.messages[0]
-    // Identity is injected (any non-empty message triggers wakeup)
-    expect(userMsg.parts.length).toBe(2)
-
-    const identityParts = userMsg.parts.filter(
-      (p: any) => typeof p.text === "string" && p.text.includes("[MemPalace Identity]"),
-    )
-    expect(identityParts.length).toBe(1)
-
-    const recallParts = userMsg.parts.filter(
-      (p: any) => typeof p.text === "string" && p.text.includes("[MemPalace Recall]"),
-    )
-    // Recall is skipped because empty search result
-    expect(recallParts.length).toBe(0)
-
+    expect(result.parts.length).toBe(1)
+    const text = result.parts[0].text
+    expect(text.startsWith("[MemPalace Identity]")).toBe(true)
+    expect(text).toContain("I am Test User.")
+    expect(text).not.toContain("[MemPalace Recall]")
+    expect(text.endsWith("Hi")).toBe(true)
     expect(result.wakeupDone).toBe(true)
   })
 })
