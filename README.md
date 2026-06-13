@@ -16,7 +16,7 @@ An OpenCode plugin that automatically saves every conversation to MemPalace and 
 | You repeat context each time | Memory is automatic |
 | Model starts from scratch each time | Memory persists across sessions |
 
-The plugin injects relevant memories from MemPalace into every prompt (via `experimental.chat.messages.transform`), and saves every response back to MemPalace. A perfect feedback loop.
+The plugin injects relevant memories from MemPalace into every prompt (via `chat.message`), and saves every response back to MemPalace. A perfect feedback loop.
 
 ---
 
@@ -61,7 +61,7 @@ The `mempalace mcp` command gives you the exact MCP setup string for your config
 
 ### 4. Memory injection (recommended)
 
-The plugin automatically injects your identity + relevant memories from MemPalace into every prompt. No model discipline required.
+The plugin automatically injects your identity + project context + relevant memories from MemPalace into every prompt. No model discipline required.
 
 Create `~/.mempalace/plugin-config.json`:
 
@@ -74,8 +74,32 @@ Create `~/.mempalace/plugin-config.json`:
 **Do NOT put this in `opencode.json`** — OpenCode's schema validation rejects unknown keys. The plugin reads its config from `~/.mempalace/plugin-config.json` instead.
 
 When enabled:
-- **First message**: Injects your identity from `~/.mempalace/identity.txt`
-- **Every message**: Runs `mempalace search` and injects relevant results
+- **First message**: Injects `[MemPalace Identity]` from `~/.mempalace/identity.txt` + `[MemPalace L1]` from `mempalace wake-up` (project goals, architecture, current tasks from L1 files)
+- **Every message**: Runs `mempalace search` and injects results as `[MemPalace Recall]`
+
+#### Advanced configuration
+
+The `plugin-config.json` supports optional tuning parameters beyond `autoInjectContext`:
+
+```json
+{
+  "autoInjectContext": true,
+  "maxMempalaceSearchChars": 900,
+  "maxWakeUpChars": 900,
+  "maxSearchResults": 3,
+  "searchDebounceMs": 3000,
+  "minQueryLength": 15
+}
+```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `autoInjectContext` | `false` | Enable identity + L1 + recall injection on every message |
+| `maxMempalaceSearchChars` | `900` | Max characters of `mempalace search` output to inject as `[MemPalace Recall]` |
+| `maxWakeUpChars` | `900` | Max characters of `mempalace wake-up` L1+ output to inject as `[MemPalace L1]` |
+| `maxSearchResults` | `3` | Number of search results (`--results` flag) |
+| `searchDebounceMs` | `3000` | Minimum interval between consecutive searches (ms) |
+| `minQueryLength` | `15` | Minimum user message character count to trigger a search |
 
 #### AGENTS.md for this mode
 
@@ -187,8 +211,9 @@ The `mempalace mcp` command gives you the exact MCP setup string for your config
 
 ```
 You ask a question
-  → Plugin hooks into `experimental.chat.messages.transform`
-  → Injects your identity + relevant memories from MemPalace
+  → Plugin hooks into `chat.message`
+  → First message: injects [MemPalace Identity] + [MemPalace L1] (project context from `mempalace wake-up`)
+  → Every message: runs `mempalace search` → injects [MemPalace Recall]
   → Model sees context without having to search
 
 The model responds
@@ -215,10 +240,12 @@ Every turn (question + answer) is saved as a drawer in MemPalace. No forced cate
                  ┌──────────────────────────────┐
                  │         OpenCode              │
                  │                               │
-  User msg ─────►│  experimental.chat.messages   │
-                 │  .transform hook              │
+  User msg ─────►│  chat.message hook            │
                  │    ↓                          │
-                 │  Injects identity + memories  │
+                 │  First: [MemPalace Identity]  │
+                 │       + [MemPalace L1]        │
+                 │    ↓                          │
+                 │  Always: [MemPalace Recall]   │
                  │  (autoInjectContext: true)    │
                  │    ↓                          │
                  │  Model sees context → answers │
@@ -257,7 +284,7 @@ Every turn (question + answer) is saved as a drawer in MemPalace. No forced cate
 |---|---|
 | `~/.config/opencode/opencode.json` | OpenCode config with plugin + MCP |
 | `~/.config/opencode/AGENTS.md` | Tells the model to manage KG facts |
-| `~/.mempalace/plugin-config.json` | Plugin config (`autoInjectContext`) |
+| `~/.mempalace/plugin-config.json` | Plugin config (`autoInjectContext`, `maxMempalaceSearchChars`, `maxWakeUpChars`, `maxSearchResults`, `searchDebounceMs`, `minQueryLength`) |
 | `~/.mempalace/identity.txt` | Your identity (injected by plugin) |
 | `~/.mempalace/config.json` | MemPalace config (palace path) |
 | `~/.mempalace/knowledge_graph.sqlite3` | Knowledge Graph (structured facts) |
@@ -289,6 +316,52 @@ export OPENCODE_MEMPALACE_DEBUG=1
 ```
 
 When set, the plugin writes a debug log to `/tmp/opencode-mempalace.log`.
+
+---
+
+## Testing
+
+### Prerequisites
+
+- [`opencode`](https://opencode.ai) CLI on `$PATH` (or set `OPENCODE_BIN`)
+- `mempalace` installed and on `$PATH`
+- Node.js dependencies installed (`npm install`)
+
+### Run all e2e tests
+
+```bash
+npm run test:e2e
+```
+
+This builds the plugin (`tsc`), then runs the e2e test suite with vitest, stopping at the first failure (`--bail=1`).
+
+### Watch mode (development)
+
+```bash
+npm run test:e2e:dev
+```
+
+Runs vitest in watch mode — useful when iterating on tests or code.
+
+### Run tests by tag
+
+Tests are tagged with `@injection`, `@search`, `@mining`, `@storage`, `@init`, `@config`:
+
+```bash
+npx vitest run --bail=1 --tags @injection
+npx vitest run --bail=1 --tags @mining
+```
+
+### How it works
+
+Tests spin up a sandboxed OpenCode instance with:
+- A temporary `$HOME` with a test `opencode.jsonc` config, `plugin-config.json`, and `identity.txt`
+- A local SSE test provider that streams mock AI responses
+- An isolated mempalace palace under `/tmp/mp-e2e-*`
+
+Each test case sends a message via `opencode run --format json`, then verifies database state, memory injection, or file mining through `opencode export` and `opencode db` queries.
+
+Configuration: `vitest.config.ts` — 120s test timeout, forks pool, single-fork mode.
 
 ---
 
