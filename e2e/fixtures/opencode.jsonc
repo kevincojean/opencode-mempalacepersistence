@@ -1,0 +1,34 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    ["__PLUGIN_PATH__", {}]
+  ],
+  "small_model": "proxy/quick",
+  "agent": {
+    "build": { "model": "proxy/quick" }
+  },
+  "provider": {
+    "proxy": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LLM Proxy",
+      "options": {
+        "baseURL": "http://localhost:8000/v1",
+        "apiKey": "__PROXY_API_KEY__",
+        "timeout": 300000
+      },
+      "models": {
+        "quick": { "id": "gemini_cli/quick", "limit": { "context": 225000, "output": 64000 } }
+      }
+    }
+  },
+  "permission": {
+    "*": "deny"
+  },
+  "share": "disabled",
+  "autoupdate": false,
+  "formatter": false,
+  "username": " ",
+  "compaction": {
+    "auto": false
+  }
+}
