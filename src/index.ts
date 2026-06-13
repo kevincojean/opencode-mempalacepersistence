@@ -165,27 +165,11 @@ function filterSearchResults(results: ParsedResult[]): ParsedResult[] {
   )
 }
 
-function rebuildSearchOutput(results: ParsedResult[], query: string): string {
+function rebuildSearchOutput(results: ParsedResult[]): string {
   if (results.length === 0) return ""
-
-  const header = [
-    "============================================================",
-    `  Results for: "${query}"`,
-    "============================================================",
-  ].join("\n")
-
-  const parts = results.map((r, i) => {
-    const indentedContent = r.content.split("\n").map(l => `      ${l}`).join("\n")
-    return [
-      `  [${i + 1}] ${r.wing} / ${r.room}`,
-      `      Source: ${r.source}`,
-      `      Match:  cosine=${r.cosine.toFixed(3)}  bm25=${r.bm25.toFixed(3)}`,
-      "",
-      indentedContent,
-    ].join("\n")
-  })
-
-  return header + "\n\n" + parts.join(`\n\n${RESULT_SEPARATOR}\n\n`) + `\n\n${RESULT_SEPARATOR}\n`
+  return results
+    .map((r, i) => `[${i + 1}] ${r.wing}/${r.room} (cos:${r.cosine.toFixed(3)} bm25:${r.bm25.toFixed(3)})\n${r.content}`)
+    .join("\n---\n")
 }
 
 function mempalaceSearch(query: string): string {
@@ -204,7 +188,7 @@ function mempalaceSearch(query: string): string {
     const filtered = filterSearchResults(parsed)
     if (filtered.length === 0) { lastSearchResult = ""; return "" }
 
-    const rebuilt = rebuildSearchOutput(filtered, query)
+    const rebuilt = rebuildSearchOutput(filtered)
     lastSearchResult = rebuilt.slice(0, maxSearchChars)
     return lastSearchResult
   } catch {
@@ -222,7 +206,13 @@ function mempalaceWakeUp(): string {
     }).trim()
     if (!out || out.startsWith("No palace")) { wakeUpCache = ""; return "" }
     const l1Index = out.indexOf("\n## L1")
-    wakeUpCache = l1Index >= 0 ? out.slice(l1Index + 1) : out
+    const rawL1 = l1Index >= 0 ? out.slice(l1Index + 1) : out
+    wakeUpCache = rawL1
+      .split("\n")
+      .map(line => line.trim())
+      .filter(line => line.length > 0 && !line.startsWith("===") && !line.startsWith("---"))
+      .map(line => line.replace(/\s*\([^)]+\.[a-z0-9]+\)$/i, ""))
+      .join("\n")
     wakeUpCache = wakeUpCache.slice(0, maxWakeUpChars)
     return wakeUpCache
   } catch {
