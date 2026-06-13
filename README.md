@@ -88,7 +88,8 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
   "maxWakeUpChars": 900,
   "maxSearchResults": 3,
   "searchDebounceMs": 3000,
-  "minQueryLength": 15
+  "minQueryLength": 15,
+  "scopeSearchToWing": false
 }
 ```
 
@@ -100,6 +101,7 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
 | `maxSearchResults` | `3` | Number of search results (`--results` flag) |
 | `searchDebounceMs` | `3000` | Minimum interval between consecutive searches (ms) |
 | `minQueryLength` | `15` | Minimum user message character count to trigger a search |
+| `scopeSearchToWing` | `false` | Scope L2 (`mempalace wake-up`) and Recall (`mempalace search`) to a wing inferred from the current project directory. Wing name is sanitized with the pattern `wing_<project-basename>` (lowercased, non-alphanumeric chars replaced with `-`). Mining is also scoped to the same wing. **Note**: If multiple projects share the same basename (e.g., two repos named `api`), their wings will collide. |
 
 #### AGENTS.md for this mode
 
@@ -214,11 +216,12 @@ You ask a question
   → Plugin hooks into `chat.message`
   → First message: injects [MemPalace Identity] + [MemPalace L1] (project context from `mempalace wake-up`)
   → Every message: runs `mempalace search` → injects [MemPalace Recall]
+  → If scopeSearchToWing is true, all mempalace commands are scoped to wing_<project> (--wing flag)
   → Model sees context without having to search
 
 The model responds
   → Plugin detects the response is complete
-  → Saves the conversation to MemPalace (flat export, no hardcoded wings)
+  → Saves the conversation to MemPalace (flat export, scoped to wing if scopeSearchToWing is true)
   → Model records KG facts via MCP tools (mandatory per AGENTS.md)
 
 Next time you ask

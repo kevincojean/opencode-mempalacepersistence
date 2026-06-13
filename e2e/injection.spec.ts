@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import { mkdir, writeFile, rm } from "fs/promises"
-import { join } from "path"
+import { join, basename } from "path"
 import { tmpdir } from "os"
 import { randomUUID } from "crypto"
 
@@ -231,5 +231,86 @@ describe("Identity file read @injection @config", () => {
     })()
 
     expect(identity).toBe("Default path identity")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Wing-scoped search and L2 @search @config
+// ---------------------------------------------------------------------------
+
+function testGetWingFromPath(workspacePath: string): string {
+  if (!workspacePath || workspacePath === "/") {
+    return "wing_general"
+  }
+  const baseName = basename(workspacePath)
+  const sanitized = baseName.toLowerCase().replace(/[^a-z0-9]/g, "-")
+  if (!sanitized || sanitized === "-") {
+    return "wing_general"
+  }
+  return `wing_${sanitized}`
+}
+
+function testBuildWingFlag(scoped: boolean, wing: string): string {
+  if (!scoped || !wing) return ""
+  return ` --wing "${wing.replace(/"/g, '\\"')}"`
+}
+
+describe("Wing-scoped search and L2 @search @config", () => {
+  it("returns wing_general for empty path", () => {
+    expect(testGetWingFromPath("")).toBe("wing_general")
+  })
+
+  it("returns wing_general for root path", () => {
+    expect(testGetWingFromPath("/")).toBe("wing_general")
+  })
+
+  it("sanitizes directory name with special chars", () => {
+    expect(testGetWingFromPath("My Project!")).toBe("wing_my-project-")
+  })
+
+  it("lowercases and replaces spaces with hyphens", () => {
+    expect(testGetWingFromPath("My Project")).toBe("wing_my-project")
+  })
+
+  it("uses wing_ prefix", () => {
+    expect(testGetWingFromPath("myapp")).toBe("wing_myapp")
+  })
+
+  it("buildWingFlag returns empty string when scoping is disabled", () => {
+    expect(testBuildWingFlag(false, "wing_test")).toBe("")
+  })
+
+  it("buildWingFlag returns --wing flag when scoping is enabled", () => {
+    expect(testBuildWingFlag(true, "wing_test")).toBe(' --wing "wing_test"')
+  })
+
+  it("buildWingFlag escapes double quotes in wing name", () => {
+    expect(testBuildWingFlag(true, 'wing_"test"')).toBe(' --wing "wing_\\"test\\""')
+  })
+
+  it("scopeSearchToWing config defaults to false when not configured", async () => {
+    const { existsSync, readFileSync } = await import("fs")
+    const configPath = process.env.MEMPALACE_PLUGIN_CONFIG ?? join(
+      process.env.HOME ?? "/tmp",
+      ".mempalace/plugin-config.json",
+    )
+    let scopeValue = false
+    if (existsSync(configPath)) {
+      try {
+        const raw = JSON.parse(readFileSync(configPath, "utf-8"))
+        if (typeof raw?.scopeSearchToWing === "boolean") {
+          scopeValue = raw.scopeSearchToWing
+        }
+      } catch { /* use default */ }
+    }
+    expect(scopeValue).toBe(false)
+  })
+
+  it("includes --wing flag in simulated search command when scoped", () => {
+    const wing = "wing_test"
+    const query = "test query"
+    const flag = testBuildWingFlag(true, wing)
+    const searchCmd = `search "${query}" --results 3${flag}`
+    expect(searchCmd).toContain(`--wing "${wing}"`)
   })
 })

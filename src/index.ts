@@ -1,7 +1,7 @@
 import { execSync, exec } from "child_process"
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync } from "fs"
 import { homedir } from "os"
-import { join } from "path"
+import { join, basename, resolve } from "path"
 import { createHash } from "crypto"
 import type { Plugin } from "@opencode-ai/plugin"
 
@@ -21,6 +21,8 @@ let maxWakeUpChars = 900
 let maxSearchResults = 3
 let searchDebounceMs = 3000
 let minQueryLength = 15
+let scopeSearchToWing = false
+let currentWing = ""
 
 function log(msg: string) {
   if (!DEBUG) return
@@ -60,6 +62,19 @@ function isAutoInjectEnabled(): boolean {
   }
 }
 
+function getWingFromPath(path: string): string {
+  if (!path || path === "/") return "wing_general"
+  const base = basename(path)
+  const sanitized = base.toLowerCase().replace(/[^a-z0-9]/g, "-")
+  if (!sanitized || sanitized === "-") return "wing_general"
+  return `wing_${sanitized}`
+}
+
+function buildWingFlag(): string {
+  if (!scopeSearchToWing || !currentWing) return ""
+  return ` --wing "${currentWing.replace(/"/g, '\\"')}"`
+}
+
 function readIdentity(): string {
   if (!existsSync(IDENTITY_FILE)) return ""
   try { return readFileSync(IDENTITY_FILE, "utf-8").trim() } catch { return "" }
@@ -71,7 +86,7 @@ function mempalaceSearch(query: string): string {
   if (now - lastSearchTs < searchDebounceMs) return lastSearchResult
   lastSearchTs = now
   try {
-    const out = execSync(`${MEMPALACE_BIN} search "${query.replace(/"/g, '\\"')}" --results ${maxSearchResults}`, {
+    const out = execSync(`${MEMPALACE_BIN} search "${query.replace(/"/g, '\\"')}" --results ${maxSearchResults}${buildWingFlag()}`, {
       encoding: "utf-8",
       timeout: 15000,
     }).trim()
@@ -87,7 +102,7 @@ function mempalaceSearch(query: string): string {
 function mempalaceWakeUp(): string {
   if (wakeUpCache !== null) return wakeUpCache
   try {
-    const out = execSync(`${MEMPALACE_BIN} wake-up`, {
+    const out = execSync(`${MEMPALACE_BIN} wake-up${buildWingFlag()}`, {
       encoding: "utf-8",
       timeout: 15000,
     }).trim()
@@ -160,7 +175,7 @@ print(json.dumps(texts))
   miningLock = true
   log(`mining session ${sessionId}`)
 
-  exec(`${MEMPALACE_BIN} mine "${filePath}" --mode convos`, {
+  exec(`${MEMPALACE_BIN} mine "${filePath}" --mode convos${buildWingFlag()}`, {
     encoding: "utf-8",
     timeout: 30000,
   }, (err) => {
@@ -177,6 +192,10 @@ print(json.dumps(texts))
 }
 
 export default (async (input: any) => {
+  const workspaceDirRaw = input.worktree || input.directory || process.cwd()
+  const resolvedDir = resolve(workspaceDirRaw)
+  currentWing = getWingFromPath(resolvedDir)
+
   mkdirSync(OUT_DIR, { recursive: true })
   const autoInject = isAutoInjectEnabled()
   const identity = readIdentity()
@@ -187,6 +206,7 @@ export default (async (input: any) => {
     if (typeof raw?.maxSearchResults === "number" && raw.maxSearchResults > 0) maxSearchResults = raw.maxSearchResults
     if (typeof raw?.searchDebounceMs === "number" && raw.searchDebounceMs > 0) searchDebounceMs = raw.searchDebounceMs
     if (typeof raw?.minQueryLength === "number" && raw.minQueryLength > 0) minQueryLength = raw.minQueryLength
+    if (typeof raw?.scopeSearchToWing === "boolean") scopeSearchToWing = raw.scopeSearchToWing
   } catch {}
 
   try {
@@ -198,7 +218,7 @@ export default (async (input: any) => {
     }
   } catch (e) {}
 
-  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${maxSearchChars}, maxWakeUpChars: ${maxWakeUpChars}, maxSearchResults: ${maxSearchResults}, searchDebounceMs: ${searchDebounceMs}, minQueryLength: ${minQueryLength})`)
+  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${maxSearchChars}, maxWakeUpChars: ${maxWakeUpChars}, maxSearchResults: ${maxSearchResults}, searchDebounceMs: ${searchDebounceMs}, minQueryLength: ${minQueryLength}, scopeSearchToWing: ${scopeSearchToWing})`)
 
   return {
     "chat.message": async (input: any, output: any) => {
