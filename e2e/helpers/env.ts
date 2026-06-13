@@ -45,7 +45,7 @@ function resolveMempalacePython(): string {
 
 function testEnvVars(home: string): Record<string, string> {
   const pythonPath = resolveMempalacePython()
-  const dbPath = join(process.env.HOME ?? "/home", ".local/share/opencode/opencode.db")
+  const dbPath = join(home, ".local/share/opencode/opencode.db")
   return {
     MEMPALACE_PYTHON: pythonPath,
     MEMPALACE_BIN_PATH: resolveMempalaceBin(),

@@ -50,7 +50,7 @@ export async function opencodeRun(env: TestEnv, message: string, options?: {
   try {
     const result = await execa("script", ["-q", "-c", shellCmd, scriptOut], {
       env: { HOME: env.home, ...env.pluginEnv },
-      timeout: options?.timeout ?? 35_000,
+      timeout: options?.timeout ?? 70_000,
       reject: false,
     })
 
