@@ -89,7 +89,10 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
   "maxSearchResults": 3,
   "searchDebounceMs": 3000,
   "minQueryLength": 15,
-  "scopeSearchToWing": false
+  "scopeSearchToWing": false,
+  "l3RecallCosineSimilarityThreshold": 0.7,
+  "l3RecallBm25MinScore": 0.0,
+  "l3RecallMinContentLength": 50
 }
 ```
 
@@ -102,6 +105,9 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
 | `searchDebounceMs` | `3000` | Minimum interval between consecutive searches (ms) |
 | `minQueryLength` | `15` | Minimum user message character count to trigger a search |
 | `scopeSearchToWing` | `false` | Scope L2 (`mempalace wake-up`) and Recall (`mempalace search`) to a wing inferred from the current project directory. Wing name is sanitized with the pattern `wing_<project-basename>` (lowercased, non-alphanumeric chars replaced with `-`). Mining is also scoped to the same wing. **Note**: If multiple projects share the same basename (e.g., two repos named `api`), their wings will collide. |
+| `l3RecallCosineSimilarityThreshold` | `0.7` | Minimum cosine similarity to include a search result. Results below this threshold are dropped. Set to `0` to disable. |
+| `l3RecallBm25MinScore` | `0.0` | Minimum BM25 (keyword overlap) score to include a result. Default `0` means no BM25 filtering. Raise to e.g. `0.5` to require keyword overlap. |
+| `l3RecallMinContentLength` | `50` | Minimum character length of the content text to include a result. Filters out short boilerplate like "Done." or "Here's what I did." |
 
 #### AGENTS.md for this mode
 

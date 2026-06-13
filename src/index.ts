@@ -24,6 +24,9 @@ let searchDebounceMs = 3000
 let minQueryLength = 15
 let scopeSearchToWing = false
 let currentWing = ""
+let l3RecallCosineSimilarityThreshold = 0.7
+let l3RecallBm25MinScore = 0.0
+let l3RecallMinContentLength = 50
 
 function log(msg: string) {
   if (!DEBUG) return
@@ -90,6 +93,101 @@ function readIdentity(): string {
   try { return readFileSync(IDENTITY_FILE, "utf-8").trim() } catch { return "" }
 }
 
+interface ParsedResult {
+  wing: string
+  room: string
+  source: string
+  cosine: number
+  bm25: number
+  content: string
+}
+
+const RESULT_SEPARATOR = "  ────────────────────────────────────────────────────────"
+
+function parseSearchResults(output: string): ParsedResult[] {
+  const blocks = output.split(RESULT_SEPARATOR)
+  const results: ParsedResult[] = []
+
+  for (let bi = 0; bi < blocks.length; bi++) {
+    const block = blocks[bi]
+    if (!block.trim()) continue
+    const lines = block.split("\n")
+    let idx = 0
+
+    // For first block, skip header lines (=== lines + "Results for:" line + blank)
+    if (bi === 0) {
+      while (idx < lines.length && (
+        lines[idx].trim() === "" ||
+        lines[idx].startsWith("===") ||
+        lines[idx].includes("Results for:")
+      )) idx++
+    }
+
+    // Skip leading blank lines
+    while (idx < lines.length && lines[idx].trim() === "") idx++
+    if (idx >= lines.length) continue
+
+    const header = lines[idx].trim().match(/\[\d+\]\s+(.+?)\s*\/\s*(.+)/)
+    if (!header) continue
+    idx++
+
+    while (idx < lines.length && lines[idx].trim() === "") idx++
+    const src = lines[idx].trim().match(/Source:\s+(.+)/)
+    if (!src) continue
+    idx++
+
+    while (idx < lines.length && lines[idx].trim() === "") idx++
+    const match = lines[idx].trim().match(/cosine=([\d.]+)\s+bm25=([\d.]+)/)
+    if (!match) continue
+    idx++
+
+    while (idx < lines.length && lines[idx].trim() === "") idx++
+    const content = lines.slice(idx).map(l => l.replace(/^ {6}/, "")).join("\n").trim()
+
+    results.push({
+      wing: header[1].trim(),
+      room: header[2].trim(),
+      source: src[1].trim(),
+      cosine: parseFloat(match[1]),
+      bm25: parseFloat(match[2]),
+      content,
+    })
+  }
+
+  return results
+}
+
+function filterSearchResults(results: ParsedResult[]): ParsedResult[] {
+  return results.filter(r =>
+    r.cosine >= l3RecallCosineSimilarityThreshold &&
+    r.bm25 >= l3RecallBm25MinScore &&
+    r.content.length >= l3RecallMinContentLength
+  )
+}
+
+function rebuildSearchOutput(results: ParsedResult[], query: string): string {
+  if (results.length === 0) return ""
+
+  const header = [
+    "============================================================",
+    `  Results for: "${query}"`,
+    "============================================================",
+  ].join("\n")
+
+  const parts = results.map((r, i) => {
+    const indentedContent = r.content.split("\n").map(l => `      ${l}`).join("\n")
+    return [
+      `  [${i + 1}] ${r.wing} / ${r.room}`,
+      `      Source: ${r.source}`,
+      `      Match:  cosine=${r.cosine.toFixed(3)}  bm25=${r.bm25.toFixed(3)}`,
+      "",
+      indentedContent,
+    ].join("\n")
+  })
+
+  return header + "\n\n" + parts.join(`\n\n${RESULT_SEPARATOR}\n\n`) + `\n\n${RESULT_SEPARATOR}\n`
+}
+
 function mempalaceSearch(query: string): string {
   const now = Date.now()
   if (query.trim().length < minQueryLength) return ""
@@ -101,7 +199,13 @@ function mempalaceSearch(query: string): string {
       timeout: 15000,
     }).trim()
     if (!out || out.includes("No results")) { lastSearchResult = ""; return "" }
-    lastSearchResult = out.slice(0, maxSearchChars)
+
+    const parsed = parseSearchResults(out)
+    const filtered = filterSearchResults(parsed)
+    if (filtered.length === 0) { lastSearchResult = ""; return "" }
+
+    const rebuilt = rebuildSearchOutput(filtered, query)
+    lastSearchResult = rebuilt.slice(0, maxSearchChars)
     return lastSearchResult
   } catch {
     lastSearchResult = ""
@@ -315,6 +419,9 @@ export default (async (input: any) => {
     if (typeof raw?.searchDebounceMs === "number" && raw.searchDebounceMs > 0) searchDebounceMs = raw.searchDebounceMs
     if (typeof raw?.minQueryLength === "number" && raw.minQueryLength > 0) minQueryLength = raw.minQueryLength
     if (typeof raw?.scopeSearchToWing === "boolean") scopeSearchToWing = raw.scopeSearchToWing
+    if (typeof raw?.l3RecallCosineSimilarityThreshold === "number" && raw.l3RecallCosineSimilarityThreshold >= 0 && raw.l3RecallCosineSimilarityThreshold <= 1) l3RecallCosineSimilarityThreshold = raw.l3RecallCosineSimilarityThreshold
+    if (typeof raw?.l3RecallBm25MinScore === "number" && raw.l3RecallBm25MinScore >= 0) l3RecallBm25MinScore = raw.l3RecallBm25MinScore
+    if (typeof raw?.l3RecallMinContentLength === "number" && raw.l3RecallMinContentLength >= 0) l3RecallMinContentLength = raw.l3RecallMinContentLength
   } catch {}
 
   try {
@@ -326,7 +433,7 @@ export default (async (input: any) => {
     }
   } catch (e) {}
 
-  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${maxSearchChars}, maxWakeUpChars: ${maxWakeUpChars}, maxSearchResults: ${maxSearchResults}, searchDebounceMs: ${searchDebounceMs}, minQueryLength: ${minQueryLength}, scopeSearchToWing: ${scopeSearchToWing})`)
+  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${maxSearchChars}, maxWakeUpChars: ${maxWakeUpChars}, maxSearchResults: ${maxSearchResults}, searchDebounceMs: ${searchDebounceMs}, minQueryLength: ${minQueryLength}, scopeSearchToWing: ${scopeSearchToWing}, cosineThreshold: ${l3RecallCosineSimilarityThreshold}, bm25Min: ${l3RecallBm25MinScore}, minContentLen: ${l3RecallMinContentLength})`)
 
   return {
     "chat.message": async (input: any, output: any) => {

@@ -314,3 +314,332 @@ describe("Wing-scoped search and L2 @search @config", () => {
     expect(searchCmd).toContain(`--wing "${wing}"`)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Recall quality filters — parseSearchResults, filterSearchResults, rebuildSearchOutput
+// ---------------------------------------------------------------------------
+
+const RESULT_SEPARATOR = "  ────────────────────────────────────────────────────────"
+
+interface ParsedResult {
+  wing: string
+  room: string
+  source: string
+  cosine: number
+  bm25: number
+  content: string
+}
+
+function testParseSearchResults(output: string): ParsedResult[] {
+  const blocks = output.split(RESULT_SEPARATOR)
+  const results: ParsedResult[] = []
+
+  for (let bi = 0; bi < blocks.length; bi++) {
+    const block = blocks[bi]
+    if (!block.trim()) continue
+    const lines = block.split("\n")
+    let idx = 0
+
+    // For first block, skip header lines (=== lines + "Results for:" line + blank)
+    if (bi === 0) {
+      while (idx < lines.length && (
+        lines[idx].trim() === "" ||
+        lines[idx].startsWith("===") ||
+        lines[idx].includes("Results for:")
+      )) idx++
+    }
+
+    while (idx < lines.length && lines[idx].trim() === "") idx++
+    if (idx >= lines.length) continue
+
+    const header = lines[idx].trim().match(/\[\d+\]\s+(.+?)\s*\/\s*(.+)/)
+    if (!header) continue
+    idx++
+
+    while (idx < lines.length && lines[idx].trim() === "") idx++
+    const src = lines[idx].trim().match(/Source:\s+(.+)/)
+    if (!src) continue
+    idx++
+
+    while (idx < lines.length && lines[idx].trim() === "") idx++
+    const match = lines[idx].trim().match(/cosine=([\d.]+)\s+bm25=([\d.]+)/)
+    if (!match) continue
+    idx++
+
+    while (idx < lines.length && lines[idx].trim() === "") idx++
+    const content = lines.slice(idx).map(l => l.replace(/^ {6}/, "")).join("\n").trim()
+
+    results.push({
+      wing: header[1].trim(),
+      room: header[2].trim(),
+      source: src[1].trim(),
+      cosine: parseFloat(match[1]),
+      bm25: parseFloat(match[2]),
+      content,
+    })
+  }
+
+  return results
+}
+
+function testFilterSearchResults(
+  results: ParsedResult[],
+  cosineThreshold: number,
+  bm25Min: number,
+  minContentLen: number,
+): ParsedResult[] {
+  return results.filter(r =>
+    r.cosine >= cosineThreshold &&
+    r.bm25 >= bm25Min &&
+    r.content.length >= minContentLen,
+  )
+}
+
+function testRebuildSearchOutput(results: ParsedResult[], query: string): string {
+  if (results.length === 0) return ""
+
+  const header = [
+    "============================================================",
+    `  Results for: "${query}"`,
+    "============================================================",
+  ].join("\n")
+
+  const parts = results.map((r, i) => {
+    const indentedContent = r.content.split("\n").map(l => `      ${l}`).join("\n")
+    return [
+      `  [${i + 1}] ${r.wing} / ${r.room}`,
+      `      Source: ${r.source}`,
+      `      Match:  cosine=${r.cosine.toFixed(3)}  bm25=${r.bm25.toFixed(3)}`,
+      "",
+      indentedContent,
+    ].join("\n")
+  })
+
+  return header + "\n\n" + parts.join(`\n\n${RESULT_SEPARATOR}\n\n`) + `\n\n${RESULT_SEPARATOR}\n`
+}
+
+function makeRawResult(
+  n: number,
+  wing: string,
+  room: string,
+  source: string,
+  cosine: number,
+  bm25: number,
+  content: string,
+): string {
+  const indented = content.split("\n").map(l => `      ${l}`).join("\n")
+  return (
+    `  [${n}] ${wing} / ${room}\n` +
+    `      Source: ${source}\n` +
+    `      Match:  cosine=${cosine.toFixed(3)}  bm25=${bm25.toFixed(3)}\n\n` +
+    indented
+  )
+}
+
+function makeRawOutput(results: string[]): string {
+  const raw = `============================================================\n  Results for: "test query"\n============================================================\n`
+  return raw + "\n" + results.join(`\n\n${RESULT_SEPARATOR}\n\n`) + `\n\n${RESULT_SEPARATOR}\n`
+}
+
+describe("Recall quality filters @search @config", () => {
+  describe("parseSearchResults", () => {
+    it("parses a single result", () => {
+      const raw = makeRawOutput([
+        makeRawResult(1, "oc_sessions", "technical", "session_abc.txt", 0.73, 2.382, "Useful memory content here."),
+      ])
+
+      const parsed = testParseSearchResults(raw)
+
+      expect(parsed).toHaveLength(1)
+      expect(parsed[0].wing).toBe("oc_sessions")
+      expect(parsed[0].room).toBe("technical")
+      expect(parsed[0].source).toBe("session_abc.txt")
+      expect(parsed[0].cosine).toBeCloseTo(0.73, 3)
+      expect(parsed[0].bm25).toBeCloseTo(2.382, 3)
+      expect(parsed[0].content).toBe("Useful memory content here.")
+    })
+
+    it("parses multiple results with separator between them", () => {
+      const raw = makeRawOutput([
+        makeRawResult(1, "wing_a", "room_x", "src1.txt", 0.8, 1.0, "First result"),
+        makeRawResult(2, "wing_b", "room_y", "src2.txt", 0.75, 0.5, "Second result"),
+        makeRawResult(3, "wing_c", "room_z", "src3.txt", 0.6, 0.0, "Third result"),
+      ])
+
+      const parsed = testParseSearchResults(raw)
+
+      expect(parsed).toHaveLength(3)
+      expect(parsed[0].cosine).toBeCloseTo(0.8, 3)
+      expect(parsed[1].cosine).toBeCloseTo(0.75, 3)
+      expect(parsed[2].cosine).toBeCloseTo(0.6, 3)
+      expect(parsed[0].content).toBe("First result")
+      expect(parsed[2].content).toBe("Third result")
+    })
+
+    it("parses multi-line content", () => {
+      const content = "Line one\nLine two\nLine three"
+      const raw = makeRawOutput([
+        makeRawResult(1, "wing", "room", "src.txt", 0.7, 1.0, content),
+      ])
+
+      const parsed = testParseSearchResults(raw)
+
+      expect(parsed).toHaveLength(1)
+      expect(parsed[0].content).toBe(content)
+    })
+
+    it("returns empty array for empty output", () => {
+      expect(testParseSearchResults("")).toEqual([])
+    })
+
+    it("returns empty array for No results output", () => {
+      expect(testParseSearchResults("No results found")).toEqual([])
+    })
+  })
+
+  describe("filterSearchResults", () => {
+    const results: ParsedResult[] = [
+      { wing: "w", room: "r", source: "s1", cosine: 0.9, bm25: 2.0, content: "High quality long memory content" },
+      { wing: "w", room: "r", source: "s2", cosine: 0.65, bm25: 1.5, content: "Good BM25 but low cosine" },
+      { wing: "w", room: "r", source: "s3", cosine: 0.8, bm25: 0.0, content: "Great cosine but zero BM25" },
+      { wing: "w", room: "r", source: "s4", cosine: 0.75, bm25: 0.5, content: "OK" },
+    ]
+
+    it("filters by cosine threshold (default 0.7)", () => {
+      const filtered = testFilterSearchResults(results, 0.7, 0.0, 0)
+      expect(filtered).toHaveLength(3)
+      expect(filtered.map(r => r.source)).toEqual(["s1", "s3", "s4"])
+    })
+
+    it("filters by BM25 min score", () => {
+      const filtered = testFilterSearchResults(results, 0.0, 1.0, 0)
+      expect(filtered).toHaveLength(2)
+      expect(filtered.map(r => r.source)).toEqual(["s1", "s2"])
+    })
+
+    it("filters by min content length", () => {
+      const filtered = testFilterSearchResults(results, 0.0, 0.0, 30)
+      expect(filtered).toHaveLength(1)
+      expect(filtered[0].source).toBe("s1")
+    })
+
+    it("applies all filters together (AND)", () => {
+      const filtered = testFilterSearchResults(results, 0.7, 0.1, 10)
+      expect(filtered).toHaveLength(1)
+      expect(filtered[0].source).toBe("s1")
+    })
+
+    it("returns empty when all filtered out", () => {
+      const filtered = testFilterSearchResults(results, 0.95, 0.0, 0)
+      expect(filtered).toEqual([])
+    })
+
+    it("passes everything with default thresholds (cosine=0.0, bm25=0.0, len=0)", () => {
+      const filtered = testFilterSearchResults(results, 0.0, 0.0, 0)
+      expect(filtered).toHaveLength(4)
+    })
+  })
+
+  describe("rebuildSearchOutput", () => {
+    it("rebuilds output with correct format", () => {
+      const results: ParsedResult[] = [
+        { wing: "oc_sessions", room: "technical", source: "src.txt", cosine: 0.8, bm25: 1.5, content: "Memory content" },
+      ]
+
+      const rebuilt = testRebuildSearchOutput(results, "test query")
+
+      expect(rebuilt).toContain('Results for: "test query"')
+      expect(rebuilt).toContain("[1] oc_sessions / technical")
+      expect(rebuilt).toContain("cosine=0.800  bm25=1.500")
+      expect(rebuilt).toContain("Memory content")
+      expect(rebuilt).toContain(RESULT_SEPARATOR.trim())
+    })
+
+    it("rebuilds output with multiple results", () => {
+      const results: ParsedResult[] = [
+        { wing: "a", room: "r1", source: "s1.txt", cosine: 0.9, bm25: 2.0, content: "First" },
+        { wing: "b", room: "r2", source: "s2.txt", cosine: 0.8, bm25: 1.0, content: "Second" },
+      ]
+
+      const rebuilt = testRebuildSearchOutput(results, "query")
+
+      expect(rebuilt).toContain("[1] a / r1")
+      expect(rebuilt).toContain("[2] b / r2")
+    })
+
+    it("returns empty string for empty results", () => {
+      expect(testRebuildSearchOutput([], "query")).toBe("")
+    })
+
+    it("indents multi-line content correctly", () => {
+      const results: ParsedResult[] = [
+        { wing: "w", room: "r", source: "s.txt", cosine: 0.9, bm25: 1.0, content: "Line 1\nLine 2" },
+      ]
+
+      const rebuilt = testRebuildSearchOutput(results, "q")
+      const lines = rebuilt.split("\n")
+
+      // Content lines should have 6-space indent
+      expect(lines.some(l => l === "      Line 1")).toBe(true)
+      expect(lines.some(l => l === "      Line 2")).toBe(true)
+    })
+  })
+
+  describe("full pipeline integration", () => {
+    it("drops results below cosine 0.7 from raw output", () => {
+      const raw = makeRawOutput([
+        makeRawResult(1, "w", "r", "good.txt", 0.85, 2.0, "Strong match memory content"),
+        makeRawResult(2, "w", "r", "bad.txt", 0.52, 1.7, "Low quality memory snippet"),
+        makeRawResult(3, "w", "r", "ok.txt", 0.73, 0.5, "Decent match with some content"),
+      ])
+
+      const parsed = testParseSearchResults(raw)
+      const filtered = testFilterSearchResults(parsed, 0.7, 0.0, 0)
+      const rebuilt = testRebuildSearchOutput(filtered, "test")
+
+      expect(filtered).toHaveLength(2)
+      expect(filtered[0].source).toBe("good.txt")
+      expect(filtered[1].source).toBe("ok.txt")
+      expect(rebuilt).toContain("Strong match memory content")
+      expect(rebuilt).toContain("Decent match with some content")
+      expect(rebuilt).not.toContain("Low quality memory snippet")
+    })
+
+    it("drops results with BM25=0 when l3RecallBm25MinScore is raised", () => {
+      const raw = makeRawOutput([
+        makeRawResult(1, "w", "r", "has_kw.txt", 0.8, 1.2, "Contains keyword overlap"),
+        makeRawResult(2, "w", "r", "no_kw.txt", 0.78, 0.0, "Semantic only no keyword match"),
+      ])
+
+      const parsed = testParseSearchResults(raw)
+      const filtered = testFilterSearchResults(parsed, 0.0, 0.1, 0)
+
+      expect(filtered).toHaveLength(1)
+      expect(filtered[0].source).toBe("has_kw.txt")
+    })
+
+    it("drops results with boilerplate content under l3RecallMinContentLength", () => {
+      const raw = makeRawOutput([
+        makeRawResult(1, "w", "r", "long.txt", 0.8, 1.0, "This is a detailed and useful memory that has substance and helps the model understand context."),
+        makeRawResult(2, "w", "r", "short.txt", 0.75, 0.5, "Done."),
+      ])
+
+      const parsed = testParseSearchResults(raw)
+      const filtered = testFilterSearchResults(parsed, 0.0, 0.0, 50)
+
+      expect(filtered).toHaveLength(1)
+      expect(filtered[0].source).toBe("long.txt")
+    })
+
+    it("returns empty recall when all results filtered out", () => {
+      const raw = makeRawOutput([
+        makeRawResult(1, "w", "r", "low.txt", 0.5, 0.0, "Low quality."),
+      ])
+
+      const parsed = testParseSearchResults(raw)
+      const filtered = testFilterSearchResults(parsed, 0.7, 0.0, 0)
+
+      expect(filtered).toHaveLength(0)
+    })
+  })
+})
