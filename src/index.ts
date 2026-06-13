@@ -186,7 +186,13 @@ function mempalaceSearch(query: string): string {
 
     const parsed = parseSearchResults(out)
     const filtered = filterSearchResults(parsed)
-    if (filtered.length === 0) { lastSearchResult = ""; return "" }
+    if (filtered.length === 0) {
+      if (parsed.length > 0 && showToast) {
+        showToast("Recall: skipped (cosine/BM25 thresholds).", "info")
+      }
+      lastSearchResult = ""
+      return ""
+    }
 
     const rebuilt = rebuildSearchOutput(filtered)
     lastSearchResult = rebuilt.slice(0, maxSearchChars)
