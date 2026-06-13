@@ -161,6 +161,16 @@ Feature: MemPalace Persistence Plugin
     Then the temp conversation file remains in /tmp/oc-sessions/
     And miningLock is released
 
+  @mining @retry
+  Scenario: Mining is retried on lock contention
+    Given a mining operation is already in progress
+    And the palace is locked by another mempalace mine process
+    When a new user message triggers another mine attempt
+    Then the failed mine is queued for retry
+    And a "Queued, retrying..." toast is shown
+    And after the lock releases, the queued session is mined successfully
+    And the session is searchable via `mempalace search`
+
   # ─────────────────────────────────────────────
   #  Database & Export Verification
   # ─────────────────────────────────────────────

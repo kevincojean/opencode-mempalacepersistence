@@ -46,12 +46,16 @@ function resolveMempalacePython(): string {
 function testEnvVars(home: string): Record<string, string> {
   const pythonPath = resolveMempalacePython()
   const dbPath = join(home, ".local/share/opencode/opencode.db")
+  const logFile = join(home, "opencode-mempalace.log")
   return {
+    HOME: home,
     MEMPALACE_PYTHON: pythonPath,
     MEMPALACE_BIN_PATH: resolveMempalaceBin(),
     OPENCODE_DB_PATH: dbPath,
     MEMPALACE_PLUGIN_CONFIG: join(home, ".mempalace/plugin-config.json"),
     MEMPALACE_IDENTITY_FILE: join(home, ".mempalace/identity.txt"),
+    MEMPALACE_LOG_FILE: logFile,
+    OPENCODE_MEMPALACE_DEBUG: "1"
   }
 }
 
@@ -66,6 +70,7 @@ export async function createTestEnv(config: TestEnvConfig): Promise<TestEnv> {
   await mkdir(join(home, ".local", "share", "opencode"), { recursive: true })
   await mkdir(join(home, ".config", "opencode"), { recursive: true })
   await mkdir(palace, { recursive: true })
+  await mkdir(join(palace, "drawers"), { recursive: true })
 
   await writeFile(
     join(home, ".mempalace", "plugin-config.json"),

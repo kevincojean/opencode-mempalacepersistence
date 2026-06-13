@@ -36,20 +36,26 @@ function shSingleQuote(s: string): string {
 export async function opencodeRun(env: TestEnv, message: string, options?: {
   timeout?: number
   additionalArgs?: string[]
+  additionalEnv?: Record<string, string>
+  delayAfter?: number
 }): Promise<RunResult> {
   const cmdParts = [OPENCODE, "run", "--format", "json"]
   if (options?.additionalArgs?.length) {
     cmdParts.push(...options.additionalArgs)
   }
   cmdParts.push(shSingleQuote(message))
-  const shellCmd = cmdParts.join(" ")
+  
+  let shellCmd = cmdParts.join(" ")
+  if (options?.delayAfter) {
+    shellCmd = `${shellCmd} && sleep ${options.delayAfter}`
+  }
 
   const tmpDir = mkdtempSync("/tmp/mp-run-")
   const scriptOut = join(tmpDir, "script.out")
 
   try {
     const result = await execa("script", ["-q", "-c", shellCmd, scriptOut], {
-      env: { HOME: env.home, ...env.pluginEnv },
+      env: { HOME: env.home, ...env.pluginEnv, ...options?.additionalEnv },
       timeout: options?.timeout ?? 70_000,
       reject: false,
     })
@@ -135,7 +141,8 @@ export async function opencodeDB(env: TestEnv, sql: string): Promise<Record<stri
  */
 export async function mempalaceSearch(env: TestEnv, query: string): Promise<string> {
   try {
-    const result = await execa(MEMPALACE_BIN, ["--palace", env.palace, "search", query, "--results", "5"], {
+    const result = await execa(MEMPALACE_BIN, ["search", query, "--results", "5"], {
+      env: { MEMPALACE_CONFIG: join(env.home, ".mempalace/config.json") },
       timeout: 15_000,
     })
     return result.stdout
