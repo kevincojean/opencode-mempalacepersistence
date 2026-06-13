@@ -1,5 +1,5 @@
 import { execSync, exec } from "child_process"
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmdirSync, unlinkSync, appendFileSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import { createHash } from "crypto"
@@ -9,7 +9,6 @@ const HOME = homedir()
 const VENV_PYTHON = join(HOME, ".local/share/pipx/venvs/mempalace/bin/python3")
 const MEMPALACE_BIN = join(HOME, ".local/bin/mempalace")
 const OPENCODE_DB = join(HOME, ".local/share/opencode/opencode.db")
-const STATE_FILE = join(HOME, ".mempalace/sync_state.json")
 const PLUGIN_CONFIG = join(HOME, ".mempalace/plugin-config.json")
 const IDENTITY_FILE = join(HOME, ".mempalace/identity.txt")
 const OUT_DIR = "/tmp/oc-sessions"
@@ -18,6 +17,8 @@ const DEBUG = !!process.env.OPENCODE_MEMPALACE_DEBUG
 const LOG_FILE = "/tmp/opencode-mempalace.log"
 const MAX_INJECT_CHARS = 900
 const MAX_SEARCH_RESULTS = 3
+const SEARCH_DEBOUNCE_MS = 3000
+const MIN_QUERY_LENGTH = 15
 
 function log(msg: string) {
   if (!DEBUG) return
@@ -26,8 +27,10 @@ function log(msg: string) {
 }
 
 let miningLock = false
-let lastSyncTs = 0
 let wakeupDone = false
+let showToast: ((msg: string, variant?: "info" | "success" | "error") => void) | null = null
+let lastSearchTs = 0
+let lastSearchResult = ""
 
 function runPython(code: string): string {
   writeFileSync(TMP_SCRIPT, code)
@@ -60,67 +63,33 @@ function readIdentity(): string {
 }
 
 function mempalaceSearch(query: string): string {
+  const now = Date.now()
+  if (query.trim().length < MIN_QUERY_LENGTH) return ""
+  if (now - lastSearchTs < SEARCH_DEBOUNCE_MS) return lastSearchResult
+  lastSearchTs = now
   try {
     const out = execSync(`${MEMPALACE_BIN} search "${query.replace(/"/g, '\\"')}" --results ${MAX_SEARCH_RESULTS}`, {
       encoding: "utf-8",
       timeout: 15000,
     }).trim()
-    if (!out || out.includes("No results")) return ""
-    return out.slice(0, MAX_INJECT_CHARS)
+    if (!out || out.includes("No results")) { lastSearchResult = ""; return "" }
+    lastSearchResult = out.slice(0, MAX_INJECT_CHARS)
+    return lastSearchResult
   } catch {
+    lastSearchResult = ""
     return ""
   }
 }
 
-function getLastSync(): number {
-  if (!existsSync(STATE_FILE)) return 0
-  try { return JSON.parse(readFileSync(STATE_FILE, "utf-8")).last_sync_ms || 0 } catch { return 0 }
-}
-
-function dbSync(): void {
+function mineSingleSession(sessionId: string): void {
   if (miningLock) return
-  try { doDbSync() } catch (e) { log("sync err: " + String(e)) }
-}
 
-function doDbSync(): void {
-  if (lastSyncTs && Date.now() - lastSyncTs < 5000) return
-
-  const lastSync = getLastSync()
-
-  const sessions = runPython(`
-import sqlite3, json
-db = sqlite3.connect(${JSON.stringify(OPENCODE_DB)})
-rows = db.execute("""
-  SELECT DISTINCT s.id, s.title, p.worktree, s.directory, s.slug, s.time_created
-  FROM session s
-  LEFT JOIN project p ON s.project_id = p.id
-  INNER JOIN message m ON m.session_id = s.id
-  WHERE m.time_created > ${lastSync}
-  ORDER BY s.time_created
-""").fetchall()
-db.close()
-print(json.dumps(rows))
-`)
-
-  let sessionsArr: any[][]
-  try { sessionsArr = JSON.parse(sessions) } catch { return }
-  if (!sessionsArr || sessionsArr.length === 0) return
-
-  const now = Date.now()
-  const exported: string[] = []
-  mkdirSync(OUT_DIR, { recursive: true })
-
-  for (const sess of sessionsArr) {
-    const [sessId, title] = sess
-    const label = (title || "").replace(/[^a-zA-Z0-9 _-]/g, "_") || (sessId || "").slice(0, 12)
-    const prefix = `${new Date().toISOString().slice(0, 10)}_${label.slice(0, 30)}_${(sessId || "").slice(0, 8)}`
-
-    const msgs = runPython(`
+  const msgs = runPython(`
 import sqlite3, json
 db = sqlite3.connect(${JSON.stringify(OPENCODE_DB)})
 rows = db.execute("""
   SELECT m.id, m.time_created, m.data FROM message m
-  WHERE m.session_id = ${JSON.stringify(sessId)} AND m.time_created > ${lastSync}
+  WHERE m.session_id = ${JSON.stringify(sessionId)}
   ORDER BY m.time_created
 """).fetchall()
 texts = []
@@ -138,71 +107,82 @@ db.close()
 print(json.dumps(texts))
 `)
 
-    let msgList: Array<{ role: string; text: string; ts: number }>
-    try { msgList = JSON.parse(msgs) } catch { continue }
-    if (msgList.length < 2) continue
+  let msgList: Array<{ role: string; text: string; ts: number }>
+  try { msgList = JSON.parse(msgs) } catch { return }
+  if (!msgList || msgList.length < 2) return
 
-    const lines: string[] = [
-      `# ${title || label}`,
-      `Date: ${new Date().toISOString().slice(0, 10)}`,
-      `Session: ${sessId}`,
-      "",
-    ]
-    for (const m of msgList) {
-      const ts = m.ts ? new Date(m.ts).toISOString().slice(11, 19) : ""
-      lines.push(`## ${m.role.toUpperCase()} \u2014 ${ts}`)
-      lines.push("")
-      lines.push(m.text)
-      lines.push("")
-    }
-
-    const content = lines.join("\n").trim()
-    if (!content) continue
-
-    const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 12)
-    const fname = `sync_${prefix}_${contentHash}.txt`
-    writeFileSync(join(OUT_DIR, fname), content + "\n")
-    exported.push(join(OUT_DIR, fname))
+  const label = sessionId.slice(0, 8)
+  const lines: string[] = [
+    `# Session ${sessionId}`,
+    `Date: ${new Date().toISOString().slice(0, 10)}`,
+    `Session: ${sessionId}`,
+    "",
+  ]
+  for (const m of msgList) {
+    const ts = m.ts ? new Date(m.ts).toISOString().slice(11, 19) : ""
+    lines.push(`## ${m.role.toUpperCase()} \u2014 ${ts}`)
+    lines.push("")
+    lines.push(m.text)
+    lines.push("")
   }
 
-  if (exported.length === 0) return
+  const content = lines.join("\n").trim()
+  if (!content) return
 
-  writeFileSync(STATE_FILE, JSON.stringify({ last_sync_ms: now }))
-  lastSyncTs = Date.now()
+  mkdirSync(OUT_DIR, { recursive: true })
+  const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 12)
+  const fname = `session_${label}_${contentHash}.txt`
+  const filePath = join(OUT_DIR, fname)
+  writeFileSync(filePath, content + "\n")
+
   miningLock = true
-  log(`mining ${exported.length} sessions`)
+  log(`mining session ${sessionId}`)
 
-  exec(`${MEMPALACE_BIN} mine ${OUT_DIR} --mode convos`, {
+  exec(`${MEMPALACE_BIN} mine "${filePath}" --mode convos`, {
     encoding: "utf-8",
-    timeout: 120000,
+    timeout: 30000,
   }, (err) => {
     miningLock = false
-    if (err) { log(`mine err: ${err.message}`); return }
-    for (const f of exported) {
-      try { unlinkSync(f) } catch {}
+    if (err) {
+      log(`mine err: ${err.message}`)
+      if (showToast) showToast(`Erreur sync: ${err.message.slice(0, 50)}`, "error")
+      return
     }
-    try { rmdirSync(OUT_DIR) } catch {}
+    try { unlinkSync(filePath) } catch {}
+    if (showToast) showToast(`Session sauvegardée`, "success")
     log("mine done")
   })
 }
 
-export default (async () => {
+export default (async (input: any) => {
   mkdirSync(OUT_DIR, { recursive: true })
   const autoInject = isAutoInjectEnabled()
   const identity = readIdentity()
+
+  try {
+    if (input?.client?.tui?.showToast) {
+      showToast = (msg: string, variant: "info" | "success" | "error" = "info") => {
+        input.client.tui.showToast({ body: { title: "MemPalace", message: msg, variant, duration: 2500 } })
+          .catch((err: any) => log(`toast err: ${err.message || err}`))
+      }
+    }
+  } catch (e) {}
+
   log(`loaded (autoInjectContext: ${autoInject})`)
 
   return {
-    "chat.message": async (_input, output) => {
+    "chat.message": async (input: any, output: any) => {
       const role = (output.message as any).role
       if (role !== "user") return
       const text = hasText(output.parts || [])
       if (!text) return
-      log("user msg - queue sync")
-      setTimeout(() => dbSync(), 500)
+      const sessionId = input?.sessionID
+      if (!sessionId) { log("user msg - no sessionId, skipping mine"); return }
+      log(`user msg - mine session ${sessionId}`)
+      setTimeout(() => mineSingleSession(sessionId), 2000)
     },
 
-    "experimental.chat.messages.transform": async (_input, output) => {
+    "experimental.chat.messages.transform": async (_input: any, output: any) => {
       if (!autoInject) return
       if (!output?.messages?.length) return
 
@@ -239,13 +219,18 @@ export default (async () => {
       if (injectParts.length > 0) {
         lastUser.parts.push(...injectParts)
         log(`injected ${injectParts.length} context blocks`)
+        if (showToast) {
+          const parts: string[] = []
+          if (injectParts.some(p => String(p.id || "").startsWith("mp-identity"))) parts.push("identité")
+          if (injectParts.some(p => String(p.id || "").startsWith("mp-recall"))) parts.push("mémoire")
+          showToast(`Injection: ${parts.join(" + ")}`)
+        }
       }
     },
 
     event: async ({ event }: any) => {
       if (event?.type !== "session.idle") return
-      log("idle - queue sync")
-      setTimeout(() => dbSync(), 3000)
+      log("idle event ignored (mining done per-message)")
     },
   }
 }) satisfies Plugin
