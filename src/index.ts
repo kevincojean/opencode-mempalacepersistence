@@ -6,11 +6,11 @@ import { createHash } from "crypto"
 import type { Plugin } from "@opencode-ai/plugin"
 
 const HOME = homedir()
-const VENV_PYTHON = join(HOME, ".local/share/pipx/venvs/mempalace/bin/python3")
-const MEMPALACE_BIN = join(HOME, ".local/bin/mempalace")
-const OPENCODE_DB = join(HOME, ".local/share/opencode/opencode.db")
-const PLUGIN_CONFIG = join(HOME, ".mempalace/plugin-config.json")
-const IDENTITY_FILE = join(HOME, ".mempalace/identity.txt")
+const VENV_PYTHON = process.env.MEMPALACE_PYTHON ?? join(HOME, ".local/share/pipx/venvs/mempalace/bin/python3")
+const MEMPALACE_BIN = process.env.MEMPALACE_BIN_PATH ?? join(HOME, ".local/bin/mempalace")
+const OPENCODE_DB = process.env.OPENCODE_DB_PATH ?? join(HOME, ".local/share/opencode/opencode.db")
+const PLUGIN_CONFIG = process.env.MEMPALACE_PLUGIN_CONFIG ?? join(HOME, ".mempalace/plugin-config.json")
+const IDENTITY_FILE = process.env.MEMPALACE_IDENTITY_FILE ?? join(HOME, ".mempalace/identity.txt")
 const OUT_DIR = "/tmp/oc-sessions"
 const TMP_SCRIPT = "/tmp/oc-plugin-query.py"
 const DEBUG = !!process.env.OPENCODE_MEMPALACE_DEBUG

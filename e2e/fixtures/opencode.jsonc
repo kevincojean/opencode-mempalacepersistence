@@ -3,21 +3,21 @@
   "plugin": [
     ["__PLUGIN_PATH__", {}]
   ],
-  "small_model": "proxy/quick",
+  "small_model": "test/quick",
   "agent": {
-    "build": { "model": "proxy/quick" }
+    "build": { "model": "test/quick" }
   },
   "provider": {
-    "proxy": {
+    "test": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "LLM Proxy",
+      "name": "Test Provider",
       "options": {
-        "baseURL": "http://localhost:8000/v1",
-        "apiKey": "__PROXY_API_KEY__",
-        "timeout": 300000
+        "baseURL": "http://127.0.0.1:__PROVIDER_PORT__/v1",
+        "apiKey": "test-key",
+        "timeout": 5000
       },
       "models": {
-        "quick": { "id": "gemini_cli/quick", "limit": { "context": 225000, "output": 64000 } }
+        "quick": { "id": "test-model", "limit": { "context": 1000, "output": 100 } }
       }
     }
   },

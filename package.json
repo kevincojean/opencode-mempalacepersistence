@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build",
-    "test:e2e": "npm run build && vitest run",
+    "test:e2e": "npm run build && vitest run --bail=1",
     "test:e2e:dev": "vitest"
   },
   "keywords": [

@@ -1,5 +1,7 @@
 import { execa, ExecaError } from "execa"
 import { join } from "path"
+import { mkdtempSync } from "fs"
+import { readFile, rm } from "fs/promises"
 import type { TestEnv } from "./env.js"
 
 const OPENCODE = process.env.OPENCODE_BIN ?? "opencode"
@@ -14,24 +16,56 @@ export interface RunResult {
 }
 
 /**
+ * Escape a string for use inside a single-quoted POSIX shell string.
+ * Replaces each `'` with `'\''` (end-quote, literal quote, re-open-quote).
+ */
+function shSingleQuote(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'"
+}
+
+/**
  * Run `opencode run --format json` with the given message in the test environment.
- * Returns parsed JSON events and exit code.
+ *
+ * Uses `script -q -c ...` under the hood because `opencode run` refuses to emit
+ * JSON when stdout is a pipe (Node.js child_process default). `script` provides
+ * a pseudo-terminal, satisfying opencode's TTY guard.
+ *
+ * The script output is captured to a temp file and read back, because
+ * `script` on Linux writes terminal session content to a file (not stdout).
  */
 export async function opencodeRun(env: TestEnv, message: string, options?: {
   timeout?: number
   additionalArgs?: string[]
 }): Promise<RunResult> {
-  const args = ["run", "--format", "json", message, ...(options?.additionalArgs ?? [])]
+  const cmdParts = [OPENCODE, "run", "--format", "json"]
+  if (options?.additionalArgs?.length) {
+    cmdParts.push(...options.additionalArgs)
+  }
+  cmdParts.push(shSingleQuote(message))
+  const shellCmd = cmdParts.join(" ")
+
+  const tmpDir = mkdtempSync("/tmp/mp-run-")
+  const scriptOut = join(tmpDir, "script.out")
+
   try {
-    const result = await execa(OPENCODE, args, {
-      env: { HOME: env.home },
-      timeout: options?.timeout ?? 120_000,
+    const result = await execa("script", ["-q", "-c", shellCmd, scriptOut], {
+      env: { HOME: env.home, ...env.pluginEnv },
+      timeout: options?.timeout ?? 35_000,
       reject: false,
     })
-    const events = result.stdout
-      .trim()
+
+    let terminalOutput = ""
+    try {
+      terminalOutput = await readFile(scriptOut, "utf-8")
+    } catch {
+      terminalOutput = result.stdout
+    }
+
+    const lines = terminalOutput
       .split("\n")
-      .filter(Boolean)
+      .filter((l) => l && !l.startsWith("Script started") && !l.startsWith("Script done"))
+
+    const events = lines
       .map((line) => {
         try {
           return JSON.parse(line) as Record<string, unknown>
@@ -43,9 +77,9 @@ export async function opencodeRun(env: TestEnv, message: string, options?: {
 
     const sessionEvent = events.find((e) => e.sessionID)
     return {
-      stdout: result.stdout,
+      stdout: terminalOutput,
       stderr: result.stderr,
-      exitCode: result.exitCode,
+      exitCode: result.exitCode ?? 0,
       sessionID: (sessionEvent?.sessionID as string | undefined),
       events,
     }
@@ -59,6 +93,8 @@ export async function opencodeRun(env: TestEnv, message: string, options?: {
       }
     }
     throw err
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true })
   }
 }
 
@@ -68,13 +104,12 @@ export async function opencodeRun(env: TestEnv, message: string, options?: {
 export async function opencodeExport(env: TestEnv, sessionID: string): Promise<Record<string, unknown> | null> {
   try {
     const result = await execa(OPENCODE, ["export", sessionID], {
-      env: { HOME: env.home },
+      env: { HOME: env.home, ...env.pluginEnv },
       timeout: 15_000,
+      reject: false,
     })
-    // Export output: first line is status, rest is JSON
-    const lines = result.stdout.trim().split("\n")
-    const jsonStr = lines.slice(1).join("\n")
-    return JSON.parse(jsonStr) as Record<string, unknown>
+    if (result.exitCode !== 0) return null
+    return JSON.parse(result.stdout) as Record<string, unknown>
   } catch {
     return null
   }
@@ -86,7 +121,7 @@ export async function opencodeExport(env: TestEnv, sessionID: string): Promise<R
 export async function opencodeDB(env: TestEnv, sql: string): Promise<Record<string, unknown>[]> {
   try {
     const result = await execa(OPENCODE, ["db", sql, "--format", "json"], {
-      env: { HOME: env.home },
+      env: { HOME: env.home, ...env.pluginEnv },
       timeout: 10_000,
     })
     return JSON.parse(result.stdout) as Record<string, unknown>[]
