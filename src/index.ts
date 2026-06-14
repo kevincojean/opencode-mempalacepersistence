@@ -33,6 +33,9 @@ let l1RecallCosineSimilarityThreshold = 0.7
 let l1RecallBm25MinScore = 0.0
 let l1RecallMinContentLength = 0
 
+// Fix 4 - custom wake-up using mempalace search instead of native wake-up
+let l1RecallUseCustomWakeUp = false
+
 // Fix 2 - extract general feature flag
 let mineExtractGeneral = true
 
@@ -242,8 +245,34 @@ function filterWakeUpLines(output: string): string {
   return filtered
 }
 
+function mempalaceCustomWakeUp(): string {
+  const projectName = currentWing.replace(/^wing_/, "").replace(/-/g, " ")
+  const query = projectName && projectName !== "general" ? projectName : "project context"
+  const l1ResultCount = Math.max(maxSearchResults * 3, 15)
+  try {
+    const out = execSync(
+      `${MEMPALACE_BIN} search "${query.replace(/"/g, '\\"')}" --results ${l1ResultCount}${buildWingFlag()}`,
+      { encoding: "utf-8", timeout: 15000 }
+    ).trim()
+    if (!out || out.includes("No results")) { wakeUpCache = ""; return "" }
+    const parsed = parseSearchResults(out)
+    const filtered = parsed.filter(r =>
+      r.cosine >= l1RecallCosineSimilarityThreshold &&
+      r.bm25 >= l1RecallBm25MinScore &&
+      r.content.length >= l1RecallMinContentLength
+    )
+    if (filtered.length === 0) { wakeUpCache = ""; return "" }
+    wakeUpCache = rebuildSearchOutput(filtered).slice(0, maxWakeUpChars)
+    return wakeUpCache
+  } catch {
+    wakeUpCache = ""
+    return ""
+  }
+}
+
 function mempalaceWakeUp(): string {
   if (wakeUpCache !== null) return wakeUpCache
+  if (l1RecallUseCustomWakeUp) return mempalaceCustomWakeUp()
   try {
     const out = execSync(`${MEMPALACE_BIN} wake-up${buildWingFlag()}`, {
       encoding: "utf-8",
@@ -523,6 +552,7 @@ export default (async (input: any) => {
     if (typeof raw?.l1RecallCosineSimilarityThreshold === "number" && raw.l1RecallCosineSimilarityThreshold >= 0 && raw.l1RecallCosineSimilarityThreshold <= 1) l1RecallCosineSimilarityThreshold = raw.l1RecallCosineSimilarityThreshold
     if (typeof raw?.l1RecallBm25MinScore === "number" && raw.l1RecallBm25MinScore >= 0) l1RecallBm25MinScore = raw.l1RecallBm25MinScore
     if (typeof raw?.l1RecallMinContentLength === "number" && raw.l1RecallMinContentLength >= 0) l1RecallMinContentLength = raw.l1RecallMinContentLength
+    if (typeof raw?.l1RecallUseCustomWakeUp === "boolean") l1RecallUseCustomWakeUp = raw.l1RecallUseCustomWakeUp
     if (typeof raw?.mineExtractGeneral === "boolean") mineExtractGeneral = raw.mineExtractGeneral
     if (Array.isArray(raw?.autoMinedFiles)) autoMinedFiles = raw.autoMinedFiles
     if (typeof raw?.autoMineFilesCaseSensitive === "boolean") autoMineFilesCaseSensitive = raw.autoMineFilesCaseSensitive
@@ -538,7 +568,7 @@ export default (async (input: any) => {
     }
   } catch (e) {}
 
-  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${maxSearchChars}, maxWakeUpChars: ${maxWakeUpChars}, maxSearchResults: ${maxSearchResults}, searchDebounceMs: ${searchDebounceMs}, minQueryLength: ${minQueryLength}, scopeSearchToWing: ${scopeSearchToWing}, l1CosThresh: ${l1RecallCosineSimilarityThreshold}, l1Bm25Min: ${l1RecallBm25MinScore}, l1MinLen: ${l1RecallMinContentLength}, l3CosThresh: ${l2RecallCosineSimilarityThreshold}, l3Bm25Min: ${l2RecallBm25MinScore}, l3MinLen: ${l2RecallMinContentLength}, mineExtractGeneral: ${mineExtractGeneral}, autoMinedFiles: ${JSON.stringify(autoMinedFiles)}, caseSensitive: ${autoMineFilesCaseSensitive}, autoMinedDelay: ${autoMinedFilesDelayMs})`)
+  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${maxSearchChars}, maxWakeUpChars: ${maxWakeUpChars}, maxSearchResults: ${maxSearchResults}, searchDebounceMs: ${searchDebounceMs}, minQueryLength: ${minQueryLength}, scopeSearchToWing: ${scopeSearchToWing}, l1CosThresh: ${l1RecallCosineSimilarityThreshold}, l1Bm25Min: ${l1RecallBm25MinScore}, l1MinLen: ${l1RecallMinContentLength}, l1CustomWakeUp: ${l1RecallUseCustomWakeUp}, l3CosThresh: ${l2RecallCosineSimilarityThreshold}, l3Bm25Min: ${l2RecallBm25MinScore}, l3MinLen: ${l2RecallMinContentLength}, mineExtractGeneral: ${mineExtractGeneral}, autoMinedFiles: ${JSON.stringify(autoMinedFiles)}, caseSensitive: ${autoMineFilesCaseSensitive}, autoMinedDelay: ${autoMinedFilesDelayMs})`)
 
   return {
     "chat.message": async (input: any, output: any) => {

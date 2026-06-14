@@ -115,6 +115,7 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
 | `l1RecallCosineSimilarityThreshold` | `0.7` | Minimum cosine similarity for L1 wake-up items. Lines with `Match:` metadata below this threshold are dropped from the injected L1 block. Set to `0` to disable. |
 | `l1RecallBm25MinScore` | `0.0` | Minimum BM25 score for L1 wake-up items. Default `0` means no BM25 filtering for L1. Raise to e.g. `0.5` to require keyword overlap. |
 | `l1RecallMinContentLength` | `0` | Minimum line length (trimmed) to include in L1 output. Default `0` means no length filtering. |
+| `l1RecallUseCustomWakeUp` | `false` | When `true`, replaces the native `mempalace wake-up` command with a custom wake-up that queries the palace using `mempalace search` and filters results by cosine/BM25 thresholds. Provides structured filtering with per-item scores instead of post-hoc line parsing. |
 | `l2RecallCosineSimilarityThreshold` | `0.7` | Minimum cosine similarity to include a search result. Results below this threshold are dropped. Set to `0` to disable. |
 | `l2RecallBm25MinScore` | `0.0` | Minimum BM25 (keyword overlap) score to include a result. Default `0` means no BM25 filtering. Raise to e.g. `0.5` to require keyword overlap. |
 | `l2RecallMinContentLength` | `50` | Minimum character length of the content text to include a result. Filters out short boilerplate like "Done." or "Here's what I did." |
