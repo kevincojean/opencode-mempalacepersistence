@@ -1,5 +1,5 @@
 import { execSync } from "child_process"
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync, statSync, readdirSync } from "fs"
 import { homedir } from "os"
 import { join, basename, resolve } from "path"
 import { createHash } from "crypto"
@@ -24,9 +24,24 @@ let searchDebounceMs = 3000
 let minQueryLength = 15
 let scopeSearchToWing = false
 let currentWing = ""
-let l3RecallCosineSimilarityThreshold = 0.7
-let l3RecallBm25MinScore = 0.0
-let l3RecallMinContentLength = 50
+let l2RecallCosineSimilarityThreshold = 0.7
+let l2RecallBm25MinScore = 0.0
+let l2RecallMinContentLength = 50
+
+// Fix 1 - L1 recall quality filters (for wake-up output)
+let l1RecallCosineSimilarityThreshold = 0.7
+let l1RecallBm25MinScore = 0.0
+let l1RecallMinContentLength = 0
+
+// Fix 2 - extract general feature flag
+let mineExtractGeneral = true
+
+// Fix 3 - auto-mine project files on idle
+let autoMinedFiles: string[] = ["README.md", "AGENTS.md"]
+let autoMineFilesCaseSensitive = false
+let autoMinedFilesDelayMs = 30000
+let lastProjectFilesMine = 0
+const minedProjectFiles = new Map<string, number>()
 
 function log(msg: string) {
   if (!DEBUG) return
@@ -159,9 +174,9 @@ function parseSearchResults(output: string): ParsedResult[] {
 
 function filterSearchResults(results: ParsedResult[]): ParsedResult[] {
   return results.filter(r =>
-    r.cosine >= l3RecallCosineSimilarityThreshold &&
-    r.bm25 >= l3RecallBm25MinScore &&
-    r.content.length >= l3RecallMinContentLength
+    r.cosine >= l2RecallCosineSimilarityThreshold &&
+    r.bm25 >= l2RecallBm25MinScore &&
+    r.content.length >= l2RecallMinContentLength
   )
 }
 
@@ -203,6 +218,30 @@ function mempalaceSearch(query: string): string {
   }
 }
 
+function filterWakeUpLines(output: string): string {
+  if (l1RecallCosineSimilarityThreshold <= 0 && l1RecallBm25MinScore <= 0) return output
+  const lines = output.split("\n")
+  const result: string[] = []
+  for (const line of lines) {
+    const m = line.match(/Match:\s*cosine=([\d.]+)\s+bm25=([\d.]+)/)
+    if (m) {
+      const cosine = parseFloat(m[1])
+      const bm25 = parseFloat(m[2])
+      if (cosine < l1RecallCosineSimilarityThreshold || bm25 < l1RecallBm25MinScore) {
+        continue
+      }
+      result.push(line.replace(/Match:\s*cosine=[\d.]+\s+bm25=[\d.]+/, "").trimEnd())
+    } else {
+      result.push(line)
+    }
+  }
+  let filtered = result.join("\n")
+  if (l1RecallMinContentLength > 0) {
+    filtered = filtered.split("\n").filter(l => l.trim().length >= l1RecallMinContentLength).join("\n")
+  }
+  return filtered
+}
+
 function mempalaceWakeUp(): string {
   if (wakeUpCache !== null) return wakeUpCache
   try {
@@ -219,6 +258,7 @@ function mempalaceWakeUp(): string {
       .filter(line => line.length > 0 && !line.startsWith("===") && !line.startsWith("---"))
       .map(line => line.replace(/\s*\([^)]+\.[a-z0-9]+\)$/i, ""))
       .join("\n")
+    wakeUpCache = filterWakeUpLines(wakeUpCache)
     wakeUpCache = wakeUpCache.slice(0, maxWakeUpChars)
     return wakeUpCache
   } catch {
@@ -231,7 +271,8 @@ function runMineSync(filePath: string, buildWingFlag: () => string): { success: 
   const configPath = join(process.env.HOME || homedir(), ".mempalace", "config.json")
   const execEnv = { ...process.env, MEMPALACE_CONFIG: configPath, HOME: process.env.HOME || homedir() }
   
-  const cmd = `${MEMPALACE_BIN} mine "${filePath}" --mode convos${buildWingFlag()}`
+  const extractFlag = mineExtractGeneral ? " --extract general" : ""
+  const cmd = `${MEMPALACE_BIN} mine "${filePath}" --mode convos${extractFlag}${buildWingFlag()}`
   log(`running: ${cmd}`)
 
   // Use execSync (synchronous, blocking) so the Node.js process stays alive
@@ -398,6 +439,66 @@ if (result.retry) {
 setTimeout(() => processQueue(), 100)
 }
 
+function mineProjectFiles(projectDir: string): void {
+  if (autoMinedFiles.length === 0) return
+  const now = Date.now()
+  if (now - lastProjectFilesMine < autoMinedFilesDelayMs) return
+  lastProjectFilesMine = now
+
+  const toMine: string[] = []
+
+  if (autoMineFilesCaseSensitive) {
+    for (const fname of autoMinedFiles) {
+      const fpath = join(projectDir, fname)
+      if (existsSync(fpath)) {
+        const mtime = statSync(fpath).mtimeMs
+        const prev = minedProjectFiles.get(fpath) || 0
+        if (mtime > prev) {
+          toMine.push(fpath)
+          minedProjectFiles.set(fpath, mtime)
+        }
+      }
+    }
+  } else {
+    let dirFiles: string[]
+    try { dirFiles = readdirSync(projectDir) } catch { return }
+    const lowerToActual = new Map<string, string>()
+    for (const f of dirFiles) {
+      const key = f.toLowerCase()
+      if (!lowerToActual.has(key)) lowerToActual.set(key, f)
+    }
+    for (const fname of autoMinedFiles) {
+      const actualName = lowerToActual.get(fname.toLowerCase())
+      if (actualName) {
+        const fpath = join(projectDir, actualName)
+        const mtime = statSync(fpath).mtimeMs
+        const prev = minedProjectFiles.get(fpath) || 0
+        if (mtime > prev) {
+          toMine.push(fpath)
+          minedProjectFiles.set(fpath, mtime)
+        }
+      }
+    }
+  }
+
+  if (toMine.length === 0) return
+
+  const tmpDir = "/tmp/oc-project-files"
+  mkdirSync(tmpDir, { recursive: true })
+  for (const f of toMine) {
+    writeFileSync(join(tmpDir, basename(f)), readFileSync(f, "utf-8"))
+  }
+
+  if (showToast) showToast(`Projet: mining ${toMine.map(f => basename(f)).join(", ")}`, "info")
+  try {
+    const cmd = `${MEMPALACE_BIN} mine "${tmpDir}" --mode projects${buildWingFlag()}`
+    execSync(cmd, { encoding: "utf-8", timeout: 10000, killSignal: "SIGKILL", stdio: "pipe" })
+    log(`mined project files (${toMine.map(f => basename(f)).join(", ")})`)
+  } catch (err: any) {
+    log(`mine project files error: ${err.message?.slice(0, 100)}`)
+  }
+}
+
 export default (async (input: any) => {
   const home = homedir()
   const pluginConfigPath = process.env.MEMPALACE_PLUGIN_CONFIG ?? join(home, ".mempalace/plugin-config.json")
@@ -416,9 +517,16 @@ export default (async (input: any) => {
     if (typeof raw?.searchDebounceMs === "number" && raw.searchDebounceMs > 0) searchDebounceMs = raw.searchDebounceMs
     if (typeof raw?.minQueryLength === "number" && raw.minQueryLength > 0) minQueryLength = raw.minQueryLength
     if (typeof raw?.scopeSearchToWing === "boolean") scopeSearchToWing = raw.scopeSearchToWing
-    if (typeof raw?.l3RecallCosineSimilarityThreshold === "number" && raw.l3RecallCosineSimilarityThreshold >= 0 && raw.l3RecallCosineSimilarityThreshold <= 1) l3RecallCosineSimilarityThreshold = raw.l3RecallCosineSimilarityThreshold
-    if (typeof raw?.l3RecallBm25MinScore === "number" && raw.l3RecallBm25MinScore >= 0) l3RecallBm25MinScore = raw.l3RecallBm25MinScore
-    if (typeof raw?.l3RecallMinContentLength === "number" && raw.l3RecallMinContentLength >= 0) l3RecallMinContentLength = raw.l3RecallMinContentLength
+    if (typeof raw?.l2RecallCosineSimilarityThreshold === "number" && raw.l2RecallCosineSimilarityThreshold >= 0 && raw.l2RecallCosineSimilarityThreshold <= 1) l2RecallCosineSimilarityThreshold = raw.l2RecallCosineSimilarityThreshold
+    if (typeof raw?.l2RecallBm25MinScore === "number" && raw.l2RecallBm25MinScore >= 0) l2RecallBm25MinScore = raw.l2RecallBm25MinScore
+    if (typeof raw?.l2RecallMinContentLength === "number" && raw.l2RecallMinContentLength >= 0) l2RecallMinContentLength = raw.l2RecallMinContentLength
+    if (typeof raw?.l1RecallCosineSimilarityThreshold === "number" && raw.l1RecallCosineSimilarityThreshold >= 0 && raw.l1RecallCosineSimilarityThreshold <= 1) l1RecallCosineSimilarityThreshold = raw.l1RecallCosineSimilarityThreshold
+    if (typeof raw?.l1RecallBm25MinScore === "number" && raw.l1RecallBm25MinScore >= 0) l1RecallBm25MinScore = raw.l1RecallBm25MinScore
+    if (typeof raw?.l1RecallMinContentLength === "number" && raw.l1RecallMinContentLength >= 0) l1RecallMinContentLength = raw.l1RecallMinContentLength
+    if (typeof raw?.mineExtractGeneral === "boolean") mineExtractGeneral = raw.mineExtractGeneral
+    if (Array.isArray(raw?.autoMinedFiles)) autoMinedFiles = raw.autoMinedFiles
+    if (typeof raw?.autoMineFilesCaseSensitive === "boolean") autoMineFilesCaseSensitive = raw.autoMineFilesCaseSensitive
+    if (typeof raw?.autoMinedFilesDelayMs === "number" && raw.autoMinedFilesDelayMs > 0) autoMinedFilesDelayMs = raw.autoMinedFilesDelayMs
   } catch {}
 
   try {
@@ -430,7 +538,7 @@ export default (async (input: any) => {
     }
   } catch (e) {}
 
-  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${maxSearchChars}, maxWakeUpChars: ${maxWakeUpChars}, maxSearchResults: ${maxSearchResults}, searchDebounceMs: ${searchDebounceMs}, minQueryLength: ${minQueryLength}, scopeSearchToWing: ${scopeSearchToWing}, cosineThreshold: ${l3RecallCosineSimilarityThreshold}, bm25Min: ${l3RecallBm25MinScore}, minContentLen: ${l3RecallMinContentLength})`)
+  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${maxSearchChars}, maxWakeUpChars: ${maxWakeUpChars}, maxSearchResults: ${maxSearchResults}, searchDebounceMs: ${searchDebounceMs}, minQueryLength: ${minQueryLength}, scopeSearchToWing: ${scopeSearchToWing}, l1CosThresh: ${l1RecallCosineSimilarityThreshold}, l1Bm25Min: ${l1RecallBm25MinScore}, l1MinLen: ${l1RecallMinContentLength}, l3CosThresh: ${l2RecallCosineSimilarityThreshold}, l3Bm25Min: ${l2RecallBm25MinScore}, l3MinLen: ${l2RecallMinContentLength}, mineExtractGeneral: ${mineExtractGeneral}, autoMinedFiles: ${JSON.stringify(autoMinedFiles)}, caseSensitive: ${autoMineFilesCaseSensitive}, autoMinedDelay: ${autoMinedFilesDelayMs})`)
 
   return {
     "chat.message": async (input: any, output: any) => {
@@ -479,6 +587,9 @@ export default (async (input: any) => {
       if (!sid) { log(`idle event - no sessionId (event.type=${event?.type}, inputKeys=${Object.keys(input || {}).join(",")}), skipping mine`); return }
       log(`idle event - mine session ${sid}`)
       await mineSingleSession(sid)
+      if (autoMinedFiles.length > 0) {
+        setTimeout(() => mineProjectFiles(resolvedDir), autoMinedFilesDelayMs)
+      }
     },
   }
 }) satisfies Plugin

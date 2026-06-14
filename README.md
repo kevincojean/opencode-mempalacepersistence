@@ -90,9 +90,16 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
   "searchDebounceMs": 3000,
   "minQueryLength": 15,
   "scopeSearchToWing": false,
-  "l3RecallCosineSimilarityThreshold": 0.7,
-  "l3RecallBm25MinScore": 0.0,
-  "l3RecallMinContentLength": 50
+  "l1RecallCosineSimilarityThreshold": 0.7,
+  "l1RecallBm25MinScore": 0.0,
+  "l1RecallMinContentLength": 0,
+  "l2RecallCosineSimilarityThreshold": 0.7,
+  "l2RecallBm25MinScore": 0.0,
+  "l2RecallMinContentLength": 50,
+  "mineExtractGeneral": true,
+  "autoMinedFiles": ["README.md", "AGENTS.md"],
+  "autoMineFilesCaseSensitive": false,
+  "autoMinedFilesDelayMs": 30000
 }
 ```
 
@@ -105,9 +112,16 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
 | `searchDebounceMs` | `3000` | Minimum interval between consecutive searches (ms) |
 | `minQueryLength` | `15` | Minimum user message character count to trigger a search |
 | `scopeSearchToWing` | `false` | Scope L2 (`mempalace wake-up`) and Recall (`mempalace search`) to a wing inferred from the current project directory. Wing name is sanitized with the pattern `wing_<project-basename>` (lowercased, non-alphanumeric chars replaced with `-`). Mining is also scoped to the same wing. **Note**: If multiple projects share the same basename (e.g., two repos named `api`), their wings will collide. |
-| `l3RecallCosineSimilarityThreshold` | `0.7` | Minimum cosine similarity to include a search result. Results below this threshold are dropped. Set to `0` to disable. |
-| `l3RecallBm25MinScore` | `0.0` | Minimum BM25 (keyword overlap) score to include a result. Default `0` means no BM25 filtering. Raise to e.g. `0.5` to require keyword overlap. |
-| `l3RecallMinContentLength` | `50` | Minimum character length of the content text to include a result. Filters out short boilerplate like "Done." or "Here's what I did." |
+| `l1RecallCosineSimilarityThreshold` | `0.7` | Minimum cosine similarity for L1 wake-up items. Lines with `Match:` metadata below this threshold are dropped from the injected L1 block. Set to `0` to disable. |
+| `l1RecallBm25MinScore` | `0.0` | Minimum BM25 score for L1 wake-up items. Default `0` means no BM25 filtering for L1. Raise to e.g. `0.5` to require keyword overlap. |
+| `l1RecallMinContentLength` | `0` | Minimum line length (trimmed) to include in L1 output. Default `0` means no length filtering. |
+| `l2RecallCosineSimilarityThreshold` | `0.7` | Minimum cosine similarity to include a search result. Results below this threshold are dropped. Set to `0` to disable. |
+| `l2RecallBm25MinScore` | `0.0` | Minimum BM25 (keyword overlap) score to include a result. Default `0` means no BM25 filtering. Raise to e.g. `0.5` to require keyword overlap. |
+| `l2RecallMinContentLength` | `50` | Minimum character length of the content text to include a result. Filters out short boilerplate like "Done." or "Here's what I did." |
+| `mineExtractGeneral` | `true` | When `true`, appends `--extract general` to the `mempalace mine --mode convos` command. This auto-classifies mined conversations into rooms (decisions, milestones, problems) instead of dumping everything into `technical`. |
+| `autoMinedFiles` | `["README.md", "AGENTS.md"]` | Array of filenames to mine from the project root into MemPalace (using `--mode projects`) on `session.idle`. Seeds L1 with the project's overarching story. Set to `[]` to disable. Files are matched case-insensitively by default. |
+| `autoMineFilesCaseSensitive` | `false` | When `true`, filenames in `autoMinedFiles` are matched case-sensitively. |
+| `autoMinedFilesDelayMs` | `30000` | Delay in ms before mining project files after a session goes idle. Avoids mining during rapid session churn. |
 
 #### AGENTS.md for this mode
 
@@ -220,18 +234,20 @@ The `mempalace mcp` command gives you the exact MCP setup string for your config
 ```
 You ask a question
   → Plugin hooks into `chat.message`
-  → First message: injects [MemPalace Identity] + [MemPalace L1] or [MemPalace L1 : <wing>] (project context from `mempalace wake-up`)
-  → Every message: runs `mempalace search` → injects [MemPalace Recall]
+  → First message: injects [MemPalace Identity] + [MemPalace L1] or [MemPalace L1 : <wing>] (project context from `mempalace wake-up`, filtered by l1Recall* quality thresholds)
+  → Every message: runs `mempalace search` → injects [MemPalace Recall] (filtered by l2Recall* thresholds)
   → If scopeSearchToWing is true, all mempalace commands are scoped to wing_<project> (--wing flag)
   → Model sees context without having to search
 
 The model responds
   → Plugin detects the response is complete
   → Saves the conversation to MemPalace (flat export, scoped to wing if scopeSearchToWing is true)
+  → When mineExtractGeneral is true (default), --extract general auto-classifies mined conversations into rooms (decisions, milestones, problems)
+  → If autoMinedFiles is non-empty, README.md/AGENTS.md (etc.) are mined on idle
   → Model records KG facts via MCP tools (mandatory per AGENTS.md)
 
 Next time you ask
-  → Plugin finds the previous memory → injects it automatically
+  → Plugin finds previous memory → injects it automatically (garbage items filtered out by l1Recall* / l2Recall* thresholds)
   → The cycle continues, memory grows
 ```
 
