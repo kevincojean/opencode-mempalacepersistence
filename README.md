@@ -90,11 +90,14 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
   "searchDebounceMs": 3000,
   "minQueryLength": 15,
   "scopeSearchToWing": false,
-  "l1RecallCosineSimilarityThreshold": 0.7,
-  "l1RecallBm25MinScore": 0.0,
-  "l1RecallMinContentLength": 0,
+  "l1RecallCustomWakeUp": {
+    "enabled": false,
+    "cosineSimilarityThreshold": 0.7,
+    "bm25Threshold": 0.0,
+    "minContentLength": 0
+  },
   "l2RecallCosineSimilarityThreshold": 0.7,
-  "l2RecallBm25MinScore": 0.0,
+  "l2RecallBm25Threshold": 0.0,
   "l2RecallMinContentLength": 50,
   "mineExtractGeneral": true,
   "autoMinedFiles": ["README.md", "AGENTS.md"],
@@ -112,12 +115,12 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
 | `searchDebounceMs` | `3000` | Minimum interval between consecutive searches (ms) |
 | `minQueryLength` | `15` | Minimum user message character count to trigger a search |
 | `scopeSearchToWing` | `false` | Scope L2 (`mempalace wake-up`) and Recall (`mempalace search`) to a wing inferred from the current project directory. Wing name is sanitized with the pattern `wing_<project-basename>` (lowercased, non-alphanumeric chars replaced with `-`). Mining is also scoped to the same wing. **Note**: If multiple projects share the same basename (e.g., two repos named `api`), their wings will collide. |
-| `l1RecallCosineSimilarityThreshold` | `0.7` | Minimum cosine similarity for L1 wake-up items. Lines with `Match:` metadata below this threshold are dropped from the injected L1 block. Set to `0` to disable. |
-| `l1RecallBm25MinScore` | `0.0` | Minimum BM25 score for L1 wake-up items. Default `0` means no BM25 filtering for L1. Raise to e.g. `0.5` to require keyword overlap. |
-| `l1RecallMinContentLength` | `0` | Minimum line length (trimmed) to include in L1 output. Default `0` means no length filtering. |
-| `l1RecallUseCustomWakeUp` | `false` | When `true`, replaces the native `mempalace wake-up` command with a custom wake-up that queries the palace using `mempalace search` and filters results by cosine/BM25 thresholds. Provides structured filtering with per-item scores instead of post-hoc line parsing. |
+| `l1RecallCustomWakeUp.enabled` | `false` | When `true`, replaces the native `mempalace wake-up` command with a custom wake-up that queries the palace using `mempalace search` and filters results by cosine/BM25 thresholds. Provides structured filtering with per-item scores instead of post-hoc line parsing. |
+| `l1RecallCustomWakeUp.cosineSimilarityThreshold` | `0.7` | Minimum cosine similarity for L1 items. Items below this threshold are dropped. Set to `0` to disable. Only applies when `l1RecallCustomWakeUp.enabled` is `true`. |
+| `l1RecallCustomWakeUp.bm25Threshold` | `0.0` | Minimum BM25 (keyword overlap) score for L1 items. Default `0` means no BM25 filtering. Raise to e.g. `0.5` to require keyword overlap. Only applies when `l1RecallCustomWakeUp.enabled` is `true`. |
+| `l1RecallCustomWakeUp.minContentLength` | `0` | Minimum character length of item content to include in L1. Default `0` means no length filtering. Only applies when `l1RecallCustomWakeUp.enabled` is `true`. |
 | `l2RecallCosineSimilarityThreshold` | `0.7` | Minimum cosine similarity to include a search result. Results below this threshold are dropped. Set to `0` to disable. |
-| `l2RecallBm25MinScore` | `0.0` | Minimum BM25 (keyword overlap) score to include a result. Default `0` means no BM25 filtering. Raise to e.g. `0.5` to require keyword overlap. |
+| `l2RecallBm25Threshold` | `0.0` | Minimum BM25 (keyword overlap) score to include a result. Default `0` means no BM25 filtering. Raise to e.g. `0.5` to require keyword overlap. |
 | `l2RecallMinContentLength` | `50` | Minimum character length of the content text to include a result. Filters out short boilerplate like "Done." or "Here's what I did." |
 | `mineExtractGeneral` | `true` | When `true`, appends `--extract general` to the `mempalace mine --mode convos` command. This auto-classifies mined conversations into rooms (decisions, milestones, problems) instead of dumping everything into `technical`. |
 | `autoMinedFiles` | `["README.md", "AGENTS.md"]` | Array of filenames to mine from the project root into MemPalace (using `--mode projects`) on `session.idle`. Seeds L1 with the project's overarching story. Set to `[]` to disable. Files are matched case-insensitively by default. |

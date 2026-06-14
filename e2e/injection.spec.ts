@@ -630,7 +630,7 @@ describe("Recall quality filters @search @config", () => {
       expect(rebuilt).not.toContain("Low quality memory snippet")
     })
 
-    it("drops results with BM25=0 when l3RecallBm25MinScore is raised", () => {
+    it("drops results with BM25=0 when l2RecallBm25Threshold is raised", () => {
       const raw = makeRawOutput([
         makeRawResult(1, "w", "r", "has_kw.txt", 0.8, 1.2, "Contains keyword overlap"),
         makeRawResult(2, "w", "r", "no_kw.txt", 0.78, 0.0, "Semantic only no keyword match"),

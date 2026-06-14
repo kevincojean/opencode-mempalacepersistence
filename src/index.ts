@@ -4,6 +4,7 @@ import { homedir } from "os"
 import { join, basename, resolve } from "path"
 import { createHash } from "crypto"
 import type { Plugin } from "@opencode-ai/plugin"
+import { loadPluginConfig, type PluginConfig } from "./config.js"
 
 const HOME = process.env.HOME || homedir()
 const VENV_PYTHON = process.env.MEMPALACE_PYTHON ?? join(HOME, ".local/share/pipx/venvs/mempalace/bin/python3")
@@ -16,33 +17,8 @@ const TMP_SCRIPT = "/tmp/oc-plugin-query.py"
 const LOG_FILE = process.env.MEMPALACE_LOG_FILE ?? "/tmp/opencode-mempalace.log"
 const DEBUG = !!process.env.OPENCODE_MEMPALACE_DEBUG
 
-// Configurable defaults (overridable via plugin-config.json)
-let maxSearchChars = 900
-let maxWakeUpChars = 900
-let maxSearchResults = 3
-let searchDebounceMs = 3000
-let minQueryLength = 15
-let scopeSearchToWing = false
+let config: PluginConfig
 let currentWing = ""
-let l2RecallCosineSimilarityThreshold = 0.7
-let l2RecallBm25MinScore = 0.0
-let l2RecallMinContentLength = 50
-
-// Fix 1 - L1 recall quality filters (for wake-up output)
-let l1RecallCosineSimilarityThreshold = 0.7
-let l1RecallBm25MinScore = 0.0
-let l1RecallMinContentLength = 0
-
-// Fix 4 - custom wake-up using mempalace search instead of native wake-up
-let l1RecallUseCustomWakeUp = false
-
-// Fix 2 - extract general feature flag
-let mineExtractGeneral = true
-
-// Fix 3 - auto-mine project files on idle
-let autoMinedFiles: string[] = ["README.md", "AGENTS.md"]
-let autoMineFilesCaseSensitive = false
-let autoMinedFilesDelayMs = 30000
 let lastProjectFilesMine = 0
 const minedProjectFiles = new Map<string, number>()
 
@@ -102,7 +78,7 @@ function getWingFromPath(path: string): string {
 }
 
 function buildWingFlag(): string {
-  if (!scopeSearchToWing || !currentWing) return ""
+  if (!config.scopeSearchToWing || !currentWing) return ""
   return ` --wing "${currentWing.replace(/"/g, '\\"')}"`
 }
 
@@ -177,9 +153,9 @@ function parseSearchResults(output: string): ParsedResult[] {
 
 function filterSearchResults(results: ParsedResult[]): ParsedResult[] {
   return results.filter(r =>
-    r.cosine >= l2RecallCosineSimilarityThreshold &&
-    r.bm25 >= l2RecallBm25MinScore &&
-    r.content.length >= l2RecallMinContentLength
+    r.cosine >= config.l2RecallCosineSimilarityThreshold &&
+    r.bm25 >= config.l2RecallBm25Threshold &&
+    r.content.length >= config.l2RecallMinContentLength
   )
 }
 
@@ -192,11 +168,11 @@ function rebuildSearchOutput(results: ParsedResult[]): string {
 
 function mempalaceSearch(query: string): string {
   const now = Date.now()
-  if (query.trim().length < minQueryLength) return ""
-  if (now - lastSearchTs < searchDebounceMs) return lastSearchResult
+  if (query.trim().length < config.minQueryLength) return ""
+  if (now - lastSearchTs < config.searchDebounceMs) return lastSearchResult
   lastSearchTs = now
   try {
-    const out = execSync(`${MEMPALACE_BIN} search "${query.replace(/"/g, '\\"')}" --results ${maxSearchResults}${buildWingFlag()}`, {
+    const out = execSync(`${MEMPALACE_BIN} search "${query.replace(/"/g, '\\"')}" --results ${config.maxSearchResults}${buildWingFlag()}`, {
       encoding: "utf-8",
       timeout: 15000,
     }).trim()
@@ -213,7 +189,7 @@ function mempalaceSearch(query: string): string {
     }
 
     const rebuilt = rebuildSearchOutput(filtered)
-    lastSearchResult = rebuilt.slice(0, maxSearchChars)
+    lastSearchResult = rebuilt.slice(0, config.maxSearchChars)
     return lastSearchResult
   } catch {
     lastSearchResult = ""
@@ -222,7 +198,8 @@ function mempalaceSearch(query: string): string {
 }
 
 function filterWakeUpLines(output: string): string {
-  if (l1RecallCosineSimilarityThreshold <= 0 && l1RecallBm25MinScore <= 0) return output
+  const { cosineSimilarityThreshold, bm25Threshold, minContentLength } = config.l1RecallCustomWakeUp
+  if (cosineSimilarityThreshold <= 0 && bm25Threshold <= 0) return output
   const lines = output.split("\n")
   const result: string[] = []
   for (const line of lines) {
@@ -230,7 +207,7 @@ function filterWakeUpLines(output: string): string {
     if (m) {
       const cosine = parseFloat(m[1])
       const bm25 = parseFloat(m[2])
-      if (cosine < l1RecallCosineSimilarityThreshold || bm25 < l1RecallBm25MinScore) {
+      if (cosine < cosineSimilarityThreshold || bm25 < bm25Threshold) {
         continue
       }
       result.push(line.replace(/Match:\s*cosine=[\d.]+\s+bm25=[\d.]+/, "").trimEnd())
@@ -239,8 +216,8 @@ function filterWakeUpLines(output: string): string {
     }
   }
   let filtered = result.join("\n")
-  if (l1RecallMinContentLength > 0) {
-    filtered = filtered.split("\n").filter(l => l.trim().length >= l1RecallMinContentLength).join("\n")
+  if (minContentLength > 0) {
+    filtered = filtered.split("\n").filter(l => l.trim().length >= minContentLength).join("\n")
   }
   return filtered
 }
@@ -248,7 +225,7 @@ function filterWakeUpLines(output: string): string {
 function mempalaceCustomWakeUp(): string {
   const projectName = currentWing.replace(/^wing_/, "").replace(/-/g, " ")
   const query = projectName && projectName !== "general" ? projectName : "project context"
-  const l1ResultCount = Math.max(maxSearchResults * 3, 15)
+  const l1ResultCount = Math.max(config.maxSearchResults * 3, 15)
   try {
     const out = execSync(
       `${MEMPALACE_BIN} search "${query.replace(/"/g, '\\"')}" --results ${l1ResultCount}${buildWingFlag()}`,
@@ -256,13 +233,14 @@ function mempalaceCustomWakeUp(): string {
     ).trim()
     if (!out || out.includes("No results")) { wakeUpCache = ""; return "" }
     const parsed = parseSearchResults(out)
+    const { cosineSimilarityThreshold, bm25Threshold, minContentLength } = config.l1RecallCustomWakeUp
     const filtered = parsed.filter(r =>
-      r.cosine >= l1RecallCosineSimilarityThreshold &&
-      r.bm25 >= l1RecallBm25MinScore &&
-      r.content.length >= l1RecallMinContentLength
+      r.cosine >= cosineSimilarityThreshold &&
+      r.bm25 >= bm25Threshold &&
+      r.content.length >= minContentLength
     )
     if (filtered.length === 0) { wakeUpCache = ""; return "" }
-    wakeUpCache = rebuildSearchOutput(filtered).slice(0, maxWakeUpChars)
+    wakeUpCache = rebuildSearchOutput(filtered).slice(0, config.maxWakeUpChars)
     return wakeUpCache
   } catch {
     wakeUpCache = ""
@@ -272,7 +250,7 @@ function mempalaceCustomWakeUp(): string {
 
 function mempalaceWakeUp(): string {
   if (wakeUpCache !== null) return wakeUpCache
-  if (l1RecallUseCustomWakeUp) return mempalaceCustomWakeUp()
+  if (config.l1RecallCustomWakeUp.enabled) return mempalaceCustomWakeUp()
   try {
     const out = execSync(`${MEMPALACE_BIN} wake-up${buildWingFlag()}`, {
       encoding: "utf-8",
@@ -288,7 +266,7 @@ function mempalaceWakeUp(): string {
       .map(line => line.replace(/\s*\([^)]+\.[a-z0-9]+\)$/i, ""))
       .join("\n")
     wakeUpCache = filterWakeUpLines(wakeUpCache)
-    wakeUpCache = wakeUpCache.slice(0, maxWakeUpChars)
+    wakeUpCache = wakeUpCache.slice(0, config.maxWakeUpChars)
     return wakeUpCache
   } catch {
     wakeUpCache = ""
@@ -300,7 +278,7 @@ function runMineSync(filePath: string, buildWingFlag: () => string): { success: 
   const configPath = join(process.env.HOME || homedir(), ".mempalace", "config.json")
   const execEnv = { ...process.env, MEMPALACE_CONFIG: configPath, HOME: process.env.HOME || homedir() }
   
-  const extractFlag = mineExtractGeneral ? " --extract general" : ""
+  const extractFlag = config.mineExtractGeneral ? " --extract general" : ""
   const cmd = `${MEMPALACE_BIN} mine "${filePath}" --mode convos${extractFlag}${buildWingFlag()}`
   log(`running: ${cmd}`)
 
@@ -469,15 +447,15 @@ setTimeout(() => processQueue(), 100)
 }
 
 function mineProjectFiles(projectDir: string): void {
-  if (autoMinedFiles.length === 0) return
+  if (config.autoMinedFiles.length === 0) return
   const now = Date.now()
-  if (now - lastProjectFilesMine < autoMinedFilesDelayMs) return
+  if (now - lastProjectFilesMine < config.autoMinedFilesDelayMs) return
   lastProjectFilesMine = now
 
   const toMine: string[] = []
 
-  if (autoMineFilesCaseSensitive) {
-    for (const fname of autoMinedFiles) {
+  if (config.autoMineFilesCaseSensitive) {
+    for (const fname of config.autoMinedFiles) {
       const fpath = join(projectDir, fname)
       if (existsSync(fpath)) {
         const mtime = statSync(fpath).mtimeMs
@@ -496,7 +474,7 @@ function mineProjectFiles(projectDir: string): void {
       const key = f.toLowerCase()
       if (!lowerToActual.has(key)) lowerToActual.set(key, f)
     }
-    for (const fname of autoMinedFiles) {
+    for (const fname of config.autoMinedFiles) {
       const actualName = lowerToActual.get(fname.toLowerCase())
       if (actualName) {
         const fpath = join(projectDir, actualName)
@@ -536,28 +514,9 @@ export default (async (input: any) => {
   currentWing = getWingFromPath(resolvedDir)
 
   mkdirSync(OUT_DIR, { recursive: true })
+  config = loadPluginConfig(pluginConfigPath)
   const autoInject = isAutoInjectEnabled(pluginConfigPath)
   const identity = readIdentity()
-  try {
-    const raw = JSON.parse(readFileSync(pluginConfigPath, "utf-8"))
-    if (typeof raw?.maxMempalaceSearchChars === "number" && raw.maxMempalaceSearchChars > 0) maxSearchChars = raw.maxMempalaceSearchChars
-    if (typeof raw?.maxWakeUpChars === "number" && raw.maxWakeUpChars > 0) maxWakeUpChars = raw.maxWakeUpChars
-    if (typeof raw?.maxSearchResults === "number" && raw.maxSearchResults > 0) maxSearchResults = raw.maxSearchResults
-    if (typeof raw?.searchDebounceMs === "number" && raw.searchDebounceMs > 0) searchDebounceMs = raw.searchDebounceMs
-    if (typeof raw?.minQueryLength === "number" && raw.minQueryLength > 0) minQueryLength = raw.minQueryLength
-    if (typeof raw?.scopeSearchToWing === "boolean") scopeSearchToWing = raw.scopeSearchToWing
-    if (typeof raw?.l2RecallCosineSimilarityThreshold === "number" && raw.l2RecallCosineSimilarityThreshold >= 0 && raw.l2RecallCosineSimilarityThreshold <= 1) l2RecallCosineSimilarityThreshold = raw.l2RecallCosineSimilarityThreshold
-    if (typeof raw?.l2RecallBm25MinScore === "number" && raw.l2RecallBm25MinScore >= 0) l2RecallBm25MinScore = raw.l2RecallBm25MinScore
-    if (typeof raw?.l2RecallMinContentLength === "number" && raw.l2RecallMinContentLength >= 0) l2RecallMinContentLength = raw.l2RecallMinContentLength
-    if (typeof raw?.l1RecallCosineSimilarityThreshold === "number" && raw.l1RecallCosineSimilarityThreshold >= 0 && raw.l1RecallCosineSimilarityThreshold <= 1) l1RecallCosineSimilarityThreshold = raw.l1RecallCosineSimilarityThreshold
-    if (typeof raw?.l1RecallBm25MinScore === "number" && raw.l1RecallBm25MinScore >= 0) l1RecallBm25MinScore = raw.l1RecallBm25MinScore
-    if (typeof raw?.l1RecallMinContentLength === "number" && raw.l1RecallMinContentLength >= 0) l1RecallMinContentLength = raw.l1RecallMinContentLength
-    if (typeof raw?.l1RecallUseCustomWakeUp === "boolean") l1RecallUseCustomWakeUp = raw.l1RecallUseCustomWakeUp
-    if (typeof raw?.mineExtractGeneral === "boolean") mineExtractGeneral = raw.mineExtractGeneral
-    if (Array.isArray(raw?.autoMinedFiles)) autoMinedFiles = raw.autoMinedFiles
-    if (typeof raw?.autoMineFilesCaseSensitive === "boolean") autoMineFilesCaseSensitive = raw.autoMineFilesCaseSensitive
-    if (typeof raw?.autoMinedFilesDelayMs === "number" && raw.autoMinedFilesDelayMs > 0) autoMinedFilesDelayMs = raw.autoMinedFilesDelayMs
-  } catch {}
 
   try {
     if (input?.client?.tui?.showToast) {
@@ -568,7 +527,7 @@ export default (async (input: any) => {
     }
   } catch (e) {}
 
-  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${maxSearchChars}, maxWakeUpChars: ${maxWakeUpChars}, maxSearchResults: ${maxSearchResults}, searchDebounceMs: ${searchDebounceMs}, minQueryLength: ${minQueryLength}, scopeSearchToWing: ${scopeSearchToWing}, l1CosThresh: ${l1RecallCosineSimilarityThreshold}, l1Bm25Min: ${l1RecallBm25MinScore}, l1MinLen: ${l1RecallMinContentLength}, l1CustomWakeUp: ${l1RecallUseCustomWakeUp}, l3CosThresh: ${l2RecallCosineSimilarityThreshold}, l3Bm25Min: ${l2RecallBm25MinScore}, l3MinLen: ${l2RecallMinContentLength}, mineExtractGeneral: ${mineExtractGeneral}, autoMinedFiles: ${JSON.stringify(autoMinedFiles)}, caseSensitive: ${autoMineFilesCaseSensitive}, autoMinedDelay: ${autoMinedFilesDelayMs})`)
+  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${config.maxSearchChars}, maxWakeUpChars: ${config.maxWakeUpChars}, maxSearchResults: ${config.maxSearchResults}, searchDebounceMs: ${config.searchDebounceMs}, minQueryLength: ${config.minQueryLength}, scopeSearchToWing: ${config.scopeSearchToWing}, l1CustomWakeUp: ${JSON.stringify(config.l1RecallCustomWakeUp)}, l2CosThresh: ${config.l2RecallCosineSimilarityThreshold}, l2Bm25Thresh: ${config.l2RecallBm25Threshold}, l2MinLen: ${config.l2RecallMinContentLength}, mineExtractGeneral: ${config.mineExtractGeneral}, autoMinedFiles: ${JSON.stringify(config.autoMinedFiles)}, caseSensitive: ${config.autoMineFilesCaseSensitive}, autoMinedDelay: ${config.autoMinedFilesDelayMs})`)
 
   return {
     "chat.message": async (input: any, output: any) => {
@@ -587,7 +546,7 @@ export default (async (input: any) => {
           }
           const wakeUp = mempalaceWakeUp()
           if (wakeUp) {
-            const l1Title = scopeSearchToWing && currentWing ? `[MemPalace L1 : ${currentWing}]` : `[MemPalace L1]`
+            const l1Title = config.scopeSearchToWing && currentWing ? `[MemPalace L1 : ${currentWing}]` : `[MemPalace L1]`
             prefixTexts.push(`${l1Title}\n${wakeUp}\n[/MemPalace L1]`)
           }
         }
@@ -617,8 +576,8 @@ export default (async (input: any) => {
       if (!sid) { log(`idle event - no sessionId (event.type=${event?.type}, inputKeys=${Object.keys(input || {}).join(",")}), skipping mine`); return }
       log(`idle event - mine session ${sid}`)
       await mineSingleSession(sid)
-      if (autoMinedFiles.length > 0) {
-        setTimeout(() => mineProjectFiles(resolvedDir), autoMinedFilesDelayMs)
+      if (config.autoMinedFiles.length > 0) {
+        setTimeout(() => mineProjectFiles(resolvedDir), config.autoMinedFilesDelayMs)
       }
     },
   }
