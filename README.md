@@ -103,7 +103,12 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
   "autoMinedFiles": ["README.md", "AGENTS.md"],
   "autoMineFilesCaseSensitive": false,
   "autoMinedFilesDelayMs": 30000,
-  "fileLogging": false
+  "fileLogging": false,
+  "plugins": {
+    "oh-my-openagent": {
+      "stripInjectedPrompts": true
+    }
+  }
 }
 ```
 
@@ -128,6 +133,23 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
 | `autoMineFilesCaseSensitive` | `false` | When `true`, filenames in `autoMinedFiles` are matched case-sensitively. |
 | `autoMinedFilesDelayMs` | `30000` | Delay in ms before mining project files after a session goes idle. Avoids mining during rapid session churn. |
 | `fileLogging` | `false` | When `true`, enables file-based diagnostic logging to `/tmp/mempalace-diag.log` and (with `OPENCODE_MEMPALACE_DEBUG=1`) debug logging to `/tmp/opencode-mempalace.log`. Disabled by default — enable only for troubleshooting. |
+| `plugins.oh-my-openagent.stripInjectedPrompts` | `false` | When `true`, strips known oh-my-openagent orchestration boilerplate from user messages before sending them as `mempalace search` queries. See [Plugin compatibility](#plugin-compatibility) below. |
+
+---
+
+## Plugin compatibility
+
+When an orchestrator plugin like [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) drives the conversation, user messages are wrapped in structured boilerplate (`[CONTEXT]`, `... <!-- OMO_INTERNAL_INITIATOR -->`, `<system-reminder>`, `<ultrawork-mode>`, etc.). Without stripping, these 2000+ char prompts go straight to `mempalace search`, diluting the embedding → useless results.
+
+Set `plugins.oh-my-openagent.stripInjectedPrompts: true` in `plugin-config.json` to strip this boilerplate before search:
+
+```json
+{
+  "plugins": { "oh-my-openagent": { "stripInjectedPrompts": true } }
+}
+```
+
+---
 
 #### AGENTS.md for this mode
 
