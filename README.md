@@ -102,7 +102,8 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
   "mineExtractGeneral": true,
   "autoMinedFiles": ["README.md", "AGENTS.md"],
   "autoMineFilesCaseSensitive": false,
-  "autoMinedFilesDelayMs": 30000
+  "autoMinedFilesDelayMs": 30000,
+  "fileLogging": false
 }
 ```
 
@@ -126,6 +127,7 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
 | `autoMinedFiles` | `["README.md", "AGENTS.md"]` | Array of filenames to mine from the project root into MemPalace (using `--mode projects`) on `session.idle`. Seeds L1 with the project's overarching story. Set to `[]` to disable. Files are matched case-insensitively by default. |
 | `autoMineFilesCaseSensitive` | `false` | When `true`, filenames in `autoMinedFiles` are matched case-sensitively. |
 | `autoMinedFilesDelayMs` | `30000` | Delay in ms before mining project files after a session goes idle. Avoids mining during rapid session churn. |
+| `fileLogging` | `false` | When `true`, enables file-based diagnostic logging to `/tmp/mempalace-diag.log` and (with `OPENCODE_MEMPALACE_DEBUG=1`) debug logging to `/tmp/opencode-mempalace.log`. Disabled by default — enable only for troubleshooting. |
 
 #### AGENTS.md for this mode
 

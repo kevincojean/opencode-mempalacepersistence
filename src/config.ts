@@ -11,6 +11,14 @@ export interface L1RecallCustomWakeUpConfig {
   minContentLength: number
 }
 
+export interface OhMyOpenAgentPluginConfig {
+  stripInjectedPrompts: boolean
+}
+
+export interface PluginsConfig {
+  ohMyOpenAgent: OhMyOpenAgentPluginConfig
+}
+
 export interface PluginConfig {
   maxSearchChars: number
   maxWakeUpChars: number
@@ -26,6 +34,8 @@ export interface PluginConfig {
   autoMinedFiles: string[]
   autoMineFilesCaseSensitive: boolean
   autoMinedFilesDelayMs: number
+  fileLogging: boolean
+  plugins: PluginsConfig
 }
 
 // ---------------------------------------------------------------------------
@@ -52,6 +62,12 @@ const DEFAULTS: PluginConfig = {
   autoMinedFiles: ["README.md", "AGENTS.md"],
   autoMineFilesCaseSensitive: false,
   autoMinedFilesDelayMs: 30000,
+  fileLogging: false,
+  plugins: {
+    ohMyOpenAgent: {
+      stripInjectedPrompts: false,
+    },
+  },
 }
 
 // ---------------------------------------------------------------------------
@@ -59,7 +75,11 @@ const DEFAULTS: PluginConfig = {
 // ---------------------------------------------------------------------------
 
 export function loadPluginConfig(filePath: string): PluginConfig {
-  const config: PluginConfig = { ...DEFAULTS, l1RecallCustomWakeUp: { ...DEFAULTS.l1RecallCustomWakeUp } }
+  const config: PluginConfig = {
+    ...DEFAULTS,
+    l1RecallCustomWakeUp: { ...DEFAULTS.l1RecallCustomWakeUp },
+    plugins: { ohMyOpenAgent: { ...DEFAULTS.plugins.ohMyOpenAgent } },
+  }
 
   if (!existsSync(filePath)) return config
 
@@ -92,6 +112,8 @@ export function loadPluginConfig(filePath: string): PluginConfig {
       config.autoMineFilesCaseSensitive = raw.autoMineFilesCaseSensitive
     if (typeof raw?.autoMinedFilesDelayMs === "number" && raw.autoMinedFilesDelayMs > 0)
       config.autoMinedFilesDelayMs = raw.autoMinedFilesDelayMs
+    if (typeof raw?.fileLogging === "boolean")
+      config.fileLogging = raw.fileLogging
 
     // Nested l1RecallCustomWakeUp
     if (typeof raw?.l1RecallCustomWakeUp === "object" && raw.l1RecallCustomWakeUp !== null) {
@@ -103,6 +125,16 @@ export function loadPluginConfig(filePath: string): PluginConfig {
         config.l1RecallCustomWakeUp.bm25Threshold = c.bm25Threshold
       if (typeof c.minContentLength === "number" && c.minContentLength >= 0)
         config.l1RecallCustomWakeUp.minContentLength = c.minContentLength
+    }
+
+    // Nested plugins config
+    if (typeof raw?.plugins === "object" && raw.plugins !== null) {
+      const p = raw.plugins
+      if (typeof p?.["oh-my-openagent"] === "object" && p["oh-my-openagent"] !== null) {
+        const oma = p["oh-my-openagent"]
+        if (typeof oma.stripInjectedPrompts === "boolean")
+          config.plugins.ohMyOpenAgent.stripInjectedPrompts = oma.stripInjectedPrompts
+      }
     }
   } catch {}
 

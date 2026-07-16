@@ -1,10 +1,11 @@
-import { execSync } from "child_process"
+import { execFileSync } from "child_process"
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync, statSync, readdirSync } from "fs"
 import { homedir } from "os"
 import { join, basename, resolve } from "path"
 import { createHash } from "crypto"
 import type { Plugin } from "@opencode-ai/plugin"
 import { loadPluginConfig, type PluginConfig } from "./config.js"
+import { stripInjectedPrompts as stripOmoPrompts } from "./plugins/oh-my-openagent.js"
 
 const HOME = process.env.HOME || homedir()
 const VENV_PYTHON = process.env.MEMPALACE_PYTHON ?? join(HOME, ".local/share/pipx/venvs/mempalace/bin/python3")
@@ -16,6 +17,12 @@ const OUT_DIR = "/tmp/oc-sessions"
 const TMP_SCRIPT = "/tmp/oc-plugin-query.py"
 const LOG_FILE = process.env.MEMPALACE_LOG_FILE ?? "/tmp/opencode-mempalace.log"
 const DEBUG = !!process.env.OPENCODE_MEMPALACE_DEBUG
+const DIAG_LOG = "/tmp/mempalace-diag.log"
+
+function diagLog(msg: string) {
+  if (!config?.fileLogging) return
+  try { appendFileSync(DIAG_LOG, `[${new Date().toISOString()}] ${msg}\n`) } catch {}
+}
 
 let config: PluginConfig
 let currentWing = ""
@@ -23,7 +30,7 @@ let lastProjectFilesMine = 0
 const minedProjectFiles = new Map<string, number>()
 
 function log(msg: string) {
-  if (!DEBUG) return
+  if (!DEBUG || !config?.fileLogging) return
   const ts = new Date().toISOString()
   try { appendFileSync(LOG_FILE, `[${ts}] ${msg}\n`) } catch {}
 }
@@ -47,7 +54,7 @@ let lastSearchResult = ""
 function runPython(code: string): string {
   writeFileSync(TMP_SCRIPT, code)
   try {
-    return execSync(`${VENV_PYTHON} ${TMP_SCRIPT}`, { encoding: "utf-8", timeout: 10000, killSignal: "SIGKILL" }).trim()
+    return execFileSync(VENV_PYTHON, [TMP_SCRIPT], { encoding: "utf-8", timeout: 10000, killSignal: "SIGKILL" }).trim()
   } finally {
     try { unlinkSync(TMP_SCRIPT) } catch {}
   }
@@ -77,9 +84,25 @@ function getWingFromPath(path: string): string {
   return `wing_${sanitized}`
 }
 
-function buildWingFlag(): string {
-  if (!config.scopeSearchToWing || !currentWing) return ""
-  return ` --wing "${currentWing.replace(/"/g, '\\"')}"`
+function buildWingArgs(): string[] {
+  if (!config.scopeSearchToWing || !currentWing) return []
+  return ["--wing", currentWing]
+}
+
+const MAX_QUERY_CHARS = 200
+
+function extractSearchQuery(text: string): string {
+  let cleaned = text
+  if (config.plugins.ohMyOpenAgent.stripInjectedPrompts) {
+    cleaned = stripOmoPrompts(cleaned)
+  }
+  cleaned = cleaned.replace(/\s+/g, " ").trim()
+  if (cleaned.length > MAX_QUERY_CHARS) {
+    const truncated = cleaned.slice(0, MAX_QUERY_CHARS)
+    const lastSpace = truncated.lastIndexOf(" ")
+    return lastSpace > MAX_QUERY_CHARS * 0.5 ? truncated.slice(0, lastSpace) : truncated
+  }
+  return cleaned
 }
 
 function readIdentity(): string {
@@ -166,20 +189,39 @@ function rebuildSearchOutput(results: ParsedResult[]): string {
     .join("\n---\n")
 }
 
-function mempalaceSearch(query: string): string {
+function mempalaceSearch(rawText: string): string {
   const now = Date.now()
-  if (query.trim().length < config.minQueryLength) return ""
-  if (now - lastSearchTs < config.searchDebounceMs) return lastSearchResult
+  if (rawText.trim().length < config.minQueryLength) {
+    diagLog(`L2 SEARCH SKIP: query too short (${rawText.length} < ${config.minQueryLength})`)
+    return ""
+  }
+  if (now - lastSearchTs < config.searchDebounceMs) {
+    diagLog(`L2 SEARCH SKIP: debounced (${now - lastSearchTs}ms < ${config.searchDebounceMs}ms)`)
+    return lastSearchResult
+  }
   lastSearchTs = now
+  const query = extractSearchQuery(rawText)
+  if (!query || query.length < 5) {
+    diagLog(`L2 SEARCH SKIP: extracted query empty/too short`)
+    return ""
+  }
+  const args = ["search", query, "--results", String(config.maxSearchResults), ...buildWingArgs()]
+  diagLog(`L2 SEARCH CMD: ${MEMPALACE_BIN} ${args.join(" ")}`)
   try {
-    const out = execSync(`${MEMPALACE_BIN} search "${query.replace(/"/g, '\\"')}" --results ${config.maxSearchResults}${buildWingFlag()}`, {
+    const out = execFileSync(MEMPALACE_BIN, args, {
       encoding: "utf-8",
       timeout: 15000,
     }).trim()
-    if (!out || out.includes("No results")) { lastSearchResult = ""; return "" }
+    diagLog(`L2 SEARCH RAW OUTPUT: ${out.slice(0, 200)}...`)
+    if (!out || out.includes("No results")) {
+      diagLog(`L2 SEARCH: no results`)
+      lastSearchResult = ""; return ""
+    }
 
     const parsed = parseSearchResults(out)
+    diagLog(`L2 SEARCH PARSED: ${parsed.length} results`)
     const filtered = filterSearchResults(parsed)
+    diagLog(`L2 SEARCH FILTERED: ${filtered.length} results (thresholds: cosine>=${config.l2RecallCosineSimilarityThreshold}, bm25>=${config.l2RecallBm25Threshold}, len>=${config.l2RecallMinContentLength})`)
     if (filtered.length === 0) {
       if (parsed.length > 0 && showToast) {
         showToast("Recall: skipped (cosine/BM25 thresholds).", "info")
@@ -190,8 +232,14 @@ function mempalaceSearch(query: string): string {
 
     const rebuilt = rebuildSearchOutput(filtered)
     lastSearchResult = rebuilt.slice(0, config.maxSearchChars)
+    diagLog(`L2 SEARCH SUCCESS: injecting ${lastSearchResult.length} chars`)
     return lastSearchResult
-  } catch {
+  } catch (err: any) {
+    diagLog(`L2 SEARCH ERROR: ${err.message?.slice(0, 100)}`)
+    if (showToast) {
+      const hint = config.fileLogging ? "check logs" : "enable fileLogging in plugin-config.json"
+      showToast(`Recall error: ${hint}`, "error")
+    }
     lastSearchResult = ""
     return ""
   }
@@ -226,11 +274,11 @@ function mempalaceCustomWakeUp(): string {
   const projectName = currentWing.replace(/^wing_/, "").replace(/-/g, " ")
   const query = projectName && projectName !== "general" ? projectName : "project context"
   const l1ResultCount = Math.max(config.maxSearchResults * 3, 15)
+  const args = ["search", query, "--results", String(l1ResultCount), ...buildWingArgs()]
   try {
-    const out = execSync(
-      `${MEMPALACE_BIN} search "${query.replace(/"/g, '\\"')}" --results ${l1ResultCount}${buildWingFlag()}`,
-      { encoding: "utf-8", timeout: 15000 }
-    ).trim()
+    const out = execFileSync(MEMPALACE_BIN, args, {
+      encoding: "utf-8", timeout: 15000,
+    }).trim()
     if (!out || out.includes("No results")) { wakeUpCache = ""; return "" }
     const parsed = parseSearchResults(out)
     const { cosineSimilarityThreshold, bm25Threshold, minContentLength } = config.l1RecallCustomWakeUp
@@ -243,6 +291,10 @@ function mempalaceCustomWakeUp(): string {
     wakeUpCache = rebuildSearchOutput(filtered).slice(0, config.maxWakeUpChars)
     return wakeUpCache
   } catch {
+    if (showToast) {
+      const hint = config.fileLogging ? "check logs" : "enable fileLogging in plugin-config.json"
+      showToast(`Recall error: wake-up failed (${hint})`, "error")
+    }
     wakeUpCache = ""
     return ""
   }
@@ -252,7 +304,8 @@ function mempalaceWakeUp(): string {
   if (wakeUpCache !== null) return wakeUpCache
   if (config.l1RecallCustomWakeUp.enabled) return mempalaceCustomWakeUp()
   try {
-    const out = execSync(`${MEMPALACE_BIN} wake-up${buildWingFlag()}`, {
+    const args = ["wake-up", ...buildWingArgs()]
+    const out = execFileSync(MEMPALACE_BIN, args, {
       encoding: "utf-8",
       timeout: 15000,
     }).trim()
@@ -269,25 +322,25 @@ function mempalaceWakeUp(): string {
     wakeUpCache = wakeUpCache.slice(0, config.maxWakeUpChars)
     return wakeUpCache
   } catch {
+    if (showToast) {
+      const hint = config.fileLogging ? "check logs" : "enable fileLogging in plugin-config.json"
+      showToast(`Recall error: wake-up failed (${hint})`, "error")
+    }
     wakeUpCache = ""
     return ""
   }
 }
 
-function runMineSync(filePath: string, buildWingFlag: () => string): { success: boolean; retry: boolean; error?: string } {
+function runMineSync(filePath: string, buildWingArgs: () => string[]): { success: boolean; retry: boolean; error?: string } {
   const configPath = join(process.env.HOME || homedir(), ".mempalace", "config.json")
   const execEnv = { ...process.env, MEMPALACE_CONFIG: configPath, HOME: process.env.HOME || homedir() }
   
-  const extractFlag = config.mineExtractGeneral ? " --extract general" : ""
-  const cmd = `${MEMPALACE_BIN} mine "${filePath}" --mode convos${extractFlag}${buildWingFlag()}`
-  log(`running: ${cmd}`)
+  const args = ["mine", filePath, "--mode", "convos", ...buildWingArgs()]
+  if (config.mineExtractGeneral) args.push("--extract", "general")
+  log(`running: ${MEMPALACE_BIN} ${args.join(" ")}`)
 
-  // Use execSync (synchronous, blocking) so the Node.js process stays alive
-  // until the mining attempt completes or times out. This is critical because
-  // the parent (opencode run) exits when the event hook returns, killing async
-  // timers/callbacks. execSync blocks and guarantees completion within the timeout.
   try {
-    const stdout = execSync(cmd, {
+    execFileSync(MEMPALACE_BIN, args, {
       encoding: "utf-8",
       timeout: 3000,
       killSignal: "SIGKILL",
@@ -317,7 +370,7 @@ function processQueue(): void {
   
   log(`processing queue item ${item.sessionId} (retry ${item.retries})`)
 
-  const result = runMineSync(item.filePath, buildWingFlag)
+  const result = runMineSync(item.filePath, buildWingArgs)
   miningLock = false
 
   if (result.retry) {
@@ -425,7 +478,7 @@ if (miningLock) {
 miningLock = true
 log(`mining session ${sessionId}`)
 
-const result = runMineSync(filePath, buildWingFlag)
+const result = runMineSync(filePath, buildWingArgs)
 miningLock = false
 
 if (result.retry) {
@@ -498,8 +551,8 @@ function mineProjectFiles(projectDir: string): void {
 
   if (showToast) showToast(`Projet: mining ${toMine.map(f => basename(f)).join(", ")}`, "info")
   try {
-    const cmd = `${MEMPALACE_BIN} mine "${tmpDir}" --mode projects${buildWingFlag()}`
-    execSync(cmd, { encoding: "utf-8", timeout: 10000, killSignal: "SIGKILL", stdio: "pipe" })
+    const args = ["mine", tmpDir, "--mode", "projects", ...buildWingArgs()]
+    execFileSync(MEMPALACE_BIN, args, { encoding: "utf-8", timeout: 10000, killSignal: "SIGKILL", stdio: "pipe" })
     log(`mined project files (${toMine.map(f => basename(f)).join(", ")})`)
   } catch (err: any) {
     log(`mine project files error: ${err.message?.slice(0, 100)}`)
@@ -527,17 +580,32 @@ export default (async (input: any) => {
     }
   } catch (e) {}
 
-  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${config.maxSearchChars}, maxWakeUpChars: ${config.maxWakeUpChars}, maxSearchResults: ${config.maxSearchResults}, searchDebounceMs: ${config.searchDebounceMs}, minQueryLength: ${config.minQueryLength}, scopeSearchToWing: ${config.scopeSearchToWing}, l1CustomWakeUp: ${JSON.stringify(config.l1RecallCustomWakeUp)}, l2CosThresh: ${config.l2RecallCosineSimilarityThreshold}, l2Bm25Thresh: ${config.l2RecallBm25Threshold}, l2MinLen: ${config.l2RecallMinContentLength}, mineExtractGeneral: ${config.mineExtractGeneral}, autoMinedFiles: ${JSON.stringify(config.autoMinedFiles)}, caseSensitive: ${config.autoMineFilesCaseSensitive}, autoMinedDelay: ${config.autoMinedFilesDelayMs})`)
+  if (config.fileLogging) {
+    showToast?.("fileLogging is ON — may slow things down with many disk writes. Turn it off if you don't need it.", "info")
+  }
+
+  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${config.maxSearchChars}, maxWakeUpChars: ${config.maxWakeUpChars}, maxSearchResults: ${config.maxSearchResults}, searchDebounceMs: ${config.searchDebounceMs}, minQueryLength: ${config.minQueryLength}, scopeSearchToWing: ${config.scopeSearchToWing}, l1CustomWakeUp: ${JSON.stringify(config.l1RecallCustomWakeUp)}, l2CosThresh: ${config.l2RecallCosineSimilarityThreshold}, l2Bm25Thresh: ${config.l2RecallBm25Threshold}, l2MinLen: ${config.l2RecallMinContentLength}, mineExtractGeneral: ${config.mineExtractGeneral}, autoMinedFiles: ${JSON.stringify(config.autoMinedFiles)}, caseSensitive: ${config.autoMineFilesCaseSensitive}, autoMinedDelay: ${config.autoMinedFilesDelayMs}, plugins: ${JSON.stringify(config.plugins)})`)
+  diagLog(`PLUGIN INIT: autoInject=${autoInject}, wing=${currentWing}, dir=${resolvedDir}`)
 
   return {
     "chat.message": async (input: any, output: any) => {
+      diagLog(`CHAT.MESSAGE HOOK FIRED: outputKeys=${Object.keys(output || {}).join(",")}, hasMessage=${!!output?.message}, hasParts=${!!output?.parts}, partsLen=${output?.parts?.length || 0}`)
       const role = (output.message as any)?.role
-      if (role !== "user") return
+      diagLog(`CHAT.MESSAGE ROLE: role=${role}, messageType=${typeof output?.message}`)
+      if (role !== "user") {
+        diagLog(`CHAT.MESSAGE SKIP: role is not 'user'`)
+        return
+      }
       const text = hasText(output.parts || [])
-      if (!text) return
+      if (!text) {
+        diagLog(`CHAT.MESSAGE SKIP: no text in parts`)
+        return
+      }
+      diagLog(`CHAT.MESSAGE TEXT: len=${text.length}, preview=${text.slice(0, 50)}...`)
       const sessionId = input?.sessionID || input?.sessionId || (input as any).client?.session?.id || (input as any).client?.sessionID
 
       if (autoInject) {
+        diagLog(`CHAT.MESSAGE AUTOINJECT: starting injection`)
         const prefixTexts: string[] = []
         if (!wakeupDone) {
           wakeupDone = true
@@ -562,20 +630,27 @@ export default (async (input: any) => {
             }
           }
           log(`injected ${prefixTexts.length} context blocks`)
+          diagLog(`CHAT.MESSAGE INJECTED: ${prefixTexts.length} blocks`)
         }
+      } else {
+        diagLog(`CHAT.MESSAGE AUTOINJECT DISABLED`)
       }
 
-      if (!sessionId) { log("user msg - no sessionId, skipping mine"); return }
+      if (!sessionId) { log("user msg - no sessionId, skipping mine"); diagLog(`CHAT.MESSAGE NO SESSION ID`); return }
       log(`user msg - recorded sessionId ${sessionId}`)
+      diagLog(`CHAT.MESSAGE DONE: sessionId=${sessionId}`)
     },
 
     event: async (input: any) => {
       const { event, sessionID } = input || {}
       if (event?.type !== "session.idle") return
+      diagLog(`EVENT SESSION.IDLE: processing`)
       const sid = sessionID || (event as any)?.sessionID || (event as any)?.properties?.sessionID || (input as any)?.sessionID || (event as any)?.sessionId || (event as any)?.properties?.sessionId || (input as any)?.sessionId
       if (!sid) { log(`idle event - no sessionId (event.type=${event?.type}, inputKeys=${Object.keys(input || {}).join(",")}), skipping mine`); return }
       log(`idle event - mine session ${sid}`)
+      diagLog(`EVENT MINING: sessionId=${sid}`)
       await mineSingleSession(sid)
+      diagLog(`EVENT MINING DONE`)
       if (config.autoMinedFiles.length > 0) {
         setTimeout(() => mineProjectFiles(resolvedDir), config.autoMinedFilesDelayMs)
       }
