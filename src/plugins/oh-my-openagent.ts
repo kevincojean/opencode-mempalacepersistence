@@ -52,6 +52,34 @@ const OMO_DIRECTIVE_MAXIMIZE = /^\s*MAXIMIZE SEARCH EFFORT.*$/gm
 const OMO_DIRECTIVE_NEVER = /^\s*NEVER\s+stop\s+at\s+first\s+result.*$/gmi
 const OMO_DIRECTIVE_PLUS = /^\s*Plus\s+direct\s+tools:.*$/gmi
 
+// ---------------------------------------------------------------------------
+// Boilerplate TEXT phrases (not just structural markers)
+// These are the prose that OMO injects as mode descriptions, section headers,
+// and instructional text. After stripping structural markers via the patterns
+// above, these phrases remain and pollute the search query.
+// ---------------------------------------------------------------------------
+
+// analyze-mode boilerplate prose
+// NOTE: No ^/$ anchors — after previous replacements collapse lines, these
+// phrases may appear mid-text rather than on isolated lines.
+const OMO_ANALYZE_HEADER = /ANALYSIS MODE\.\s+Gather context before diving deep:?\s*/gi
+const OMO_CONTEXT_GATHERING = /(?:CONTEXT\s+)?GATHERING\s*\(parallel\):?\s*/gi
+const OMO_IF_COMPLEX = /IF COMPLEX\s*-\s*DO NOT STRUGGLE ALONE\.\s*Consult specialists:?\s*/gi
+const OMO_SYNTHESIZE = /SYNTHESIZE findings before proceeding\.?\s*/gi
+
+// search-mode boilerplate prose (supplemental to OMO_DIRECTIVE_MAXIMIZE which
+// may not match all variants)
+const OMO_LAUNCH_AGENTS = /Launch multiple background agents IN PARALLEL:?\s*/gi
+
+// OMO delegation instructions (injected into task prompts)
+const OMO_MANDATORY_DELEGATE = /MANDATORY\s+delegate_task\s+params:\s*ALWAYS\s+include\s+load_skills[^.]*\.?\s*/gi
+const OMO_EVALUATE_SKILLS = /Evaluate available skills before dispatch[^.]*\.?\s*/gi
+const OMO_EXAMPLE_DELEGATE = /Example:\s*delegate_task\([^)]*\)\s*/gi
+
+// team-mode / hyperplan-mode boilerplate
+const OMO_TEAM_MODE_TEXT = /\[team-mode\][^\n]*/gi
+const OMO_HYPERPLAN_TEXT = /Hyperplan mode activated[^\n]*/gi
+
 // Recovery/continuation markers
 const OMO_INTERNAL_RECOVERY = /^\s*\[internal\]\s+Continue\s+from\s+the\s+previous\s+assistant\s+state\.\s*/gm
 const OMO_SESSION_RECOVERY = /^\s*\[session recovered\s*-\s*continuing previous task\]\s*/gmi
@@ -100,4 +128,15 @@ export function stripInjectedPrompts(text: string): string {
     .replace(OMO_BULLET_LIST, "")
     // Separators
     .replace(OMO_SEPARATOR, "")
+    // Boilerplate TEXT phrases (after markers are gone, these prose lines remain)
+    .replace(OMO_ANALYZE_HEADER, "")
+    .replace(OMO_CONTEXT_GATHERING, "")
+    .replace(OMO_IF_COMPLEX, "")
+    .replace(OMO_SYNTHESIZE, "")
+    .replace(OMO_LAUNCH_AGENTS, "")
+    .replace(OMO_MANDATORY_DELEGATE, "")
+    .replace(OMO_EVALUATE_SKILLS, "")
+    .replace(OMO_EXAMPLE_DELEGATE, "")
+    .replace(OMO_TEAM_MODE_TEXT, "")
+    .replace(OMO_HYPERPLAN_TEXT, "")
 }

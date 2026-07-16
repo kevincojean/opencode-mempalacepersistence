@@ -80,9 +80,29 @@ function isAutoInjectEnabled(configPath: string): boolean {
   }
 }
 
+function getRepoRoot(workdir: string): string {
+  try {
+    const gitPath = join(workdir, ".git")
+    if (!existsSync(gitPath)) return workdir
+    const st = statSync(gitPath)
+    if (st.isDirectory()) {
+      return resolve(gitPath, "..")
+    }
+    if (st.isFile()) {
+      const content = readFileSync(gitPath, "utf-8").trim()
+      const match = content.match(/^gitdir:\s*(.+)$/m)
+      if (match) {
+        return resolve(match[1].trim(), "../../..")
+      }
+    }
+  } catch {}
+  return workdir
+}
+
 function getWingFromPath(path: string): string {
   if (!path || path === "/") return "wing_general"
-  const base = basename(path)
+  const repoRoot = getRepoRoot(path)
+  const base = basename(repoRoot)
   const sanitized = base.toLowerCase().replace(/[^a-z0-9]/g, "-")
   if (!sanitized || sanitized === "-") return "wing_general"
   return `wing_${sanitized}`
