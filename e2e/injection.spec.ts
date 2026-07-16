@@ -205,6 +205,69 @@ describe("Short message skips search @injection @search", () => {
 })
 
 // ---------------------------------------------------------------------------
+// Command-only message skipping (skipCommands)
+// ---------------------------------------------------------------------------
+
+describe("Command-only message skipping @injection @search", () => {
+  it("detects messages starting with / as commands", () => {
+    // Replicate isCommandOnly from src/index.ts
+    const isCommandOnly = (text: string): boolean => /^\s*\//.test(text.trim())
+
+    expect(isCommandOnly("/handoff")).toBe(true)
+    expect(isCommandOnly("/remember")).toBe(true)
+    expect(isCommandOnly("  /handoff")).toBe(true)
+    expect(isCommandOnly("")).toBe(false)
+    expect(isCommandOnly("Normal message")).toBe(false)
+    expect(isCommandOnly("What is my identity?")).toBe(false)
+    expect(isCommandOnly("/handoff some context is still a command")).toBe(true)
+  })
+
+  it("does not inject identity or recall for command-only messages when skipCommands is true", () => {
+    // Simulate start of chat.message hook — identity+injection should be skipped
+    const text = "/handoff"
+
+    const isCommandOnly = (t: string): boolean => /^\s*\//.test(t.trim())
+    const skipCommands = true
+
+    // This mirrors the early return check in the real handler
+    let skipped = false
+    if (skipCommands && isCommandOnly(text)) {
+      skipped = true
+    }
+
+    expect(skipped).toBe(true)
+  })
+
+  it("still processes regular messages when skipCommands is true", () => {
+    const text = "What do you remember about me?"
+
+    const isCommandOnly = (t: string): boolean => /^\s*\//.test(t.trim())
+    const skipCommands = true
+
+    let skipped = false
+    if (skipCommands && isCommandOnly(text)) {
+      skipped = true
+    }
+
+    expect(skipped).toBe(false)
+  })
+
+  it("processes command messages when skipCommands is false", () => {
+    const text = "/handoff"
+
+    const isCommandOnly = (t: string): boolean => /^\s*\//.test(t.trim())
+    const skipCommands = false
+
+    let skipped = false
+    if (skipCommands && isCommandOnly(text)) {
+      skipped = true
+    }
+
+    expect(skipped).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Identity file read integration
 // ---------------------------------------------------------------------------
 

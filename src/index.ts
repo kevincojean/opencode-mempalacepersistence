@@ -67,6 +67,10 @@ function hasText(parts: any[]): string {
     .join("\n")
 }
 
+function isCommandOnly(text: string): boolean {
+  return /^\s*\//.test(text.trim())
+}
+
 function isAutoInjectEnabled(configPath: string): boolean {
   try {
     const raw = readFileSync(configPath, "utf-8")
@@ -584,7 +588,7 @@ export default (async (input: any) => {
     showToast?.("fileLogging is ON — may slow things down with many disk writes. Turn it off if you don't need it.", "info")
   }
 
-  log(`loaded (autoInject: ${autoInject}, maxSearchChars: ${config.maxSearchChars}, maxWakeUpChars: ${config.maxWakeUpChars}, maxSearchResults: ${config.maxSearchResults}, searchDebounceMs: ${config.searchDebounceMs}, minQueryLength: ${config.minQueryLength}, scopeSearchToWing: ${config.scopeSearchToWing}, l1CustomWakeUp: ${JSON.stringify(config.l1RecallCustomWakeUp)}, l2CosThresh: ${config.l2RecallCosineSimilarityThreshold}, l2Bm25Thresh: ${config.l2RecallBm25Threshold}, l2MinLen: ${config.l2RecallMinContentLength}, mineExtractGeneral: ${config.mineExtractGeneral}, autoMinedFiles: ${JSON.stringify(config.autoMinedFiles)}, caseSensitive: ${config.autoMineFilesCaseSensitive}, autoMinedDelay: ${config.autoMinedFilesDelayMs}, plugins: ${JSON.stringify(config.plugins)})`)
+  log(`loaded (autoInject: ${autoInject}, skipCommands: ${config.skipCommands}, maxSearchChars: ${config.maxSearchChars}, maxWakeUpChars: ${config.maxWakeUpChars}, maxSearchResults: ${config.maxSearchResults}, searchDebounceMs: ${config.searchDebounceMs}, minQueryLength: ${config.minQueryLength}, scopeSearchToWing: ${config.scopeSearchToWing}, l1CustomWakeUp: ${JSON.stringify(config.l1RecallCustomWakeUp)}, l2CosThresh: ${config.l2RecallCosineSimilarityThreshold}, l2Bm25Thresh: ${config.l2RecallBm25Threshold}, l2MinLen: ${config.l2RecallMinContentLength}, mineExtractGeneral: ${config.mineExtractGeneral}, autoMinedFiles: ${JSON.stringify(config.autoMinedFiles)}, caseSensitive: ${config.autoMineFilesCaseSensitive}, autoMinedDelay: ${config.autoMinedFilesDelayMs}, plugins: ${JSON.stringify(config.plugins)})`)
   diagLog(`PLUGIN INIT: autoInject=${autoInject}, wing=${currentWing}, dir=${resolvedDir}`)
 
   return {
@@ -602,6 +606,12 @@ export default (async (input: any) => {
         return
       }
       diagLog(`CHAT.MESSAGE TEXT: len=${text.length}, preview=${text.slice(0, 50)}...`)
+
+      if (config.skipCommands && isCommandOnly(text)) {
+        diagLog(`CHAT.MESSAGE SKIP: command-only message (skipCommands enabled)`)
+        return
+      }
+
       const sessionId = input?.sessionID || input?.sessionId || (input as any).client?.session?.id || (input as any).client?.sessionID
 
       if (autoInject) {

@@ -20,6 +20,7 @@ export interface PluginsConfig {
 }
 
 export interface PluginConfig {
+  skipCommands: boolean
   maxSearchChars: number
   maxWakeUpChars: number
   maxSearchResults: number
@@ -43,6 +44,7 @@ export interface PluginConfig {
 // ---------------------------------------------------------------------------
 
 const DEFAULTS: PluginConfig = {
+  skipCommands: true,
   maxSearchChars: 900,
   maxWakeUpChars: 900,
   maxSearchResults: 3,
@@ -98,6 +100,8 @@ export function loadPluginConfig(filePath: string): PluginConfig {
       config.minQueryLength = raw.minQueryLength
     if (typeof raw?.scopeSearchToWing === "boolean")
       config.scopeSearchToWing = raw.scopeSearchToWing
+    if (typeof raw?.skipCommands === "boolean")
+      config.skipCommands = raw.skipCommands
     if (typeof raw?.l2RecallCosineSimilarityThreshold === "number" && raw.l2RecallCosineSimilarityThreshold >= 0 && raw.l2RecallCosineSimilarityThreshold <= 1)
       config.l2RecallCosineSimilarityThreshold = raw.l2RecallCosineSimilarityThreshold
     if (typeof raw?.l2RecallBm25Threshold === "number" && raw.l2RecallBm25Threshold >= 0)

@@ -86,6 +86,7 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
 ```json
 {
   "autoInjectContext": true,
+  "skipCommands": true,
   "maxMempalaceSearchChars": 900,
   "maxWakeUpChars": 900,
   "maxSearchResults": 3,
@@ -122,6 +123,7 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
 | `maxSearchResults` | `3` | Number of search results (`--results` flag) |
 | `searchDebounceMs` | `3000` | Minimum interval between consecutive searches (ms) |
 | `minQueryLength` | `15` | Minimum user message character count to trigger a search |
+| `skipCommands` | `true` | When `true`, skips all memory injection and session recording for messages that start with `/` (slash commands like `/handoff`, `/remember`, etc.). Messages containing only commands are treated as meta-instructions rather than conversational content worth remembering. |
 | `scopeSearchToWing` | `false` | Scope L2 (`mempalace wake-up`) and Recall (`mempalace search`) to a wing inferred from the current project directory. Wing name is sanitized with the pattern `wing_<project-basename>` (lowercased, non-alphanumeric chars replaced with `-`). Mining is also scoped to the same wing. **Note**: If multiple projects share the same basename (e.g., two repos named `api`), their wings will collide. |
 | `l1RecallCustomWakeUp.enabled` | `false` | When `true`, replaces the native `mempalace wake-up` command with a custom wake-up that queries the palace using `mempalace search` and filters results by cosine/BM25 thresholds. Provides structured filtering with per-item scores instead of post-hoc line parsing. |
 | `l1RecallCustomWakeUp.cosineSimilarityThreshold` | `0.7` | Minimum cosine similarity for L1 items. Items below this threshold are dropped. Set to `0` to disable. Only applies when `l1RecallCustomWakeUp.enabled` is `true`. |
@@ -264,6 +266,7 @@ The `mempalace mcp` command gives you the exact MCP setup string for your config
 ```
 You ask a question
   → Plugin hooks into `chat.message`
+  → If message is a slash command (e.g. /handoff, /remember) and skipCommands is true (default): processing stops — no memory injection, no session recording
   → First message: injects [MemPalace Identity] + [MemPalace L1] or [MemPalace L1 : <wing>] (project context from `mempalace wake-up`, filtered by l1Recall* quality thresholds)
   → Every message: runs `mempalace search` → injects [MemPalace Recall] (filtered by l2Recall* thresholds)
   → If scopeSearchToWing is true, all mempalace commands are scoped to wing_<project> (--wing flag)
