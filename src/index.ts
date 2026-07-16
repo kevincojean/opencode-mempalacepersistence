@@ -400,7 +400,7 @@ function runMineAsync(filePath: string, buildWingArgs: () => string[]): Promise<
         log(`mine exec error: ${err.message?.slice(0, 100)} killed=${err.killed} signal=${err.signal}`)
         const fullMsg = (err.message + (stderr || "")).toLowerCase()
 
-        if (err.killed || err.signal || fullMsg.includes("held by") || fullMsg.includes("locked") || fullMsg.includes("contention") || fullMsg.includes("timeout")) {
+        if (fullMsg.includes("held by") || fullMsg.includes("locked") || fullMsg.includes("contention")) {
           log("lock contention detected, will retry")
           resolve({ success: false, retry: true })
         } else {

@@ -74,7 +74,7 @@ export async function createTestEnv(config: TestEnvConfig): Promise<TestEnv> {
 
   await writeFile(
     join(home, ".mempalace", "plugin-config.json"),
-    JSON.stringify({ autoInjectContext: config.autoInjectContext }, null, 2),
+    JSON.stringify({ autoInjectContext: config.autoInjectContext, fileLogging: true }, null, 2),
     "utf-8",
   )
 

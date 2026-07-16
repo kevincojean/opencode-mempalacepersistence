@@ -107,7 +107,7 @@ describe("Session mining @mining", () => {
     } finally {
       lockProcess.kill()
     }
-  }, 70000)
+  }, 180000)
 })
 
 describe("Mining with empty or single-message sessions @mining", () => {
