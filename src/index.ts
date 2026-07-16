@@ -1,5 +1,5 @@
-import { execFileSync } from "child_process"
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync, statSync, readdirSync } from "fs"
+import { execFileSync, execFile } from "child_process"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync, statSync, readdirSync, realpathSync } from "fs"
 import { homedir } from "os"
 import { join, basename, resolve } from "path"
 import { createHash } from "crypto"
@@ -41,11 +41,14 @@ interface QueueItem {
   retries: number
 }
 
+// Now configured via PluginConfig.maxRetries / retryDelayMs — kept for reference
 const MAX_RETRIES = 3
+// Now configured via PluginConfig.retryDelayMs — kept for reference
 const RETRY_DELAY_MS = 2000
 let miningQueue: QueueItem[] = []
 let miningLock = false
 const wakeupDoneSessions = new Set<string>()
+let processQueueRunning = false
 let wakeUpCache: string | null = null
 let showToast: ((msg: string, variant?: "info" | "success" | "error") => void) | null = null
 let lastSearchTs = 0
@@ -355,60 +358,107 @@ function mempalaceWakeUp(): string {
   }
 }
 
-function runMineSync(filePath: string, buildWingArgs: () => string[]): { success: boolean; retry: boolean; error?: string } {
-  const configPath = join(process.env.HOME || homedir(), ".mempalace", "config.json")
-  const execEnv = { ...process.env, MEMPALACE_CONFIG: configPath, HOME: process.env.HOME || homedir() }
-  
-  const args = ["mine", filePath, "--mode", "convos", ...buildWingArgs()]
-  if (config.mineExtractGeneral) args.push("--extract", "general")
-  log(`running: ${MEMPALACE_BIN} ${args.join(" ")}`)
-
+function acquireMineLock(palacePath: string): { acquired: boolean; lockFile: string } {
   try {
-    execFileSync(MEMPALACE_BIN, args, {
-      encoding: "utf-8",
-      timeout: 3000,
-      killSignal: "SIGKILL",
-      env: execEnv,
-      stdio: "pipe"
-    })
-    log("mine success")
-    return { success: true, retry: false }
-  } catch (err: any) {
-    log(`mine exec error: ${err.message?.slice(0, 100)} killed=${err.killed} signal=${err.signal}`)
-    const stderr = err.stderr || ""
-    const fullMsg = (err.message + stderr).toLowerCase()
-
-    if (err.killed || err.signal || fullMsg.includes("held by") || fullMsg.includes("locked") || fullMsg.includes("contention") || fullMsg.includes("timeout")) {
-      log("lock contention detected, will retry")
-      return { success: false, retry: true }
-    }
-    return { success: false, retry: false, error: err.message }
+    const canonicalPath = realpathSync(palacePath)
+    const hash = createHash("sha256").update(canonicalPath).digest("hex").slice(0, 16)
+    const lockDir = join(homedir(), ".mempalace", "locks")
+    mkdirSync(lockDir, { recursive: true })
+    const lockFile = join(lockDir, `mine_palace_${hash}.lock`)
+    execFileSync("flock", ["-n", lockFile, "true"], { stdio: "pipe", timeout: 5000 })
+    return { acquired: true, lockFile }
+  } catch {
+    return { acquired: false, lockFile: "" }
   }
 }
 
-function processQueue(): void {
-  if (miningLock || miningQueue.length === 0) return
+function releaseMineLock(lockFile: string): void {
+  // No-op: flock auto-releases when the file descriptor is closed on subprocess exit
+  if (lockFile) { log(`lock auto-released: ${lockFile}`) }
+}
+
+function runMineAsync(filePath: string, buildWingArgs: () => string[]): Promise<{ success: boolean; retry: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    const configPath = join(process.env.HOME || homedir(), ".mempalace", "config.json")
+    const execEnv = { ...process.env, MEMPALACE_CONFIG: configPath, HOME: process.env.HOME || homedir() }
+
+    const args = ["mine", filePath, "--mode", "convos", ...buildWingArgs()]
+    if (config.mineExtractGeneral) args.push("--extract", "general")
+    log(`running: ${MEMPALACE_BIN} ${args.join(" ")}`)
+
+    const timeoutMs = config.mineTimeoutMs ?? 30000
+
+    const child = execFile("nice", ["-n", "10", MEMPALACE_BIN, ...args], {
+      encoding: "utf-8",
+      env: execEnv,
+      stdio: "pipe"
+    } as any, (err: any, stdout: string, stderr: string) => {
+      clearTimeout(timeout)
+      clearTimeout(graceKillTimer)
+
+      if (err) {
+        log(`mine exec error: ${err.message?.slice(0, 100)} killed=${err.killed} signal=${err.signal}`)
+        const fullMsg = (err.message + (stderr || "")).toLowerCase()
+
+        if (err.killed || err.signal || fullMsg.includes("held by") || fullMsg.includes("locked") || fullMsg.includes("contention") || fullMsg.includes("timeout")) {
+          log("lock contention detected, will retry")
+          resolve({ success: false, retry: true })
+        } else {
+          resolve({ success: false, retry: false, error: err.message })
+        }
+      } else {
+        log("mine success")
+        resolve({ success: true, retry: false })
+      }
+    })
+
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM")
+    }, timeoutMs)
+
+    const graceKillTimer = setTimeout(() => {
+      if (!child.killed) child.kill("SIGKILL")
+    }, timeoutMs + 5000)
+  })
+}
+
+function computeRetryDelay(retryCount: number): number {
+  const baseDelay = config.retryDelayMs ?? 2000;
+  const exponential = baseDelay * Math.pow(2, retryCount);
+  const capped = Math.min(exponential, 30000);
+  const jitter = Math.floor(Math.random() * 1000);
+  return capped + jitter;
+}
+
+async function processQueue(): Promise<void> {
+  if (processQueueRunning || miningLock || miningQueue.length === 0) return
+  processQueueRunning = true
 
   const item = miningQueue.shift()!
   miningLock = true
   
   log(`processing queue item ${item.sessionId} (retry ${item.retries})`)
 
-  const result = runMineSync(item.filePath, buildWingArgs)
+  const result = await runMineAsync(item.filePath, buildWingArgs)
   miningLock = false
 
   if (result.retry) {
-    if (item.retries < MAX_RETRIES) {
+    if (item.retries < (config.maxRetries ?? 3)) {
       item.retries++
       miningQueue.unshift(item)
       log("Queued, retrying")
       if (showToast) showToast(`Mining queued, retrying...`, "info")
-      setTimeout(() => processQueue(), RETRY_DELAY_MS)
+      setTimeout(() => processQueue(), computeRetryDelay(item.retries))
+      // processQueueRunning stays true during retry wait
     } else {
-      log(`mine failed after ${MAX_RETRIES} attempts`)
+      log(`mine failed after ${config.maxRetries ?? 3} attempts`)
       if (showToast) showToast(`Erreur sync: mining failed after 3 attempts`, "error")
       try { unlinkSync(item.filePath) } catch {}
-      setTimeout(() => processQueue(), 100)
+      if (miningQueue.length > 0) {
+        setTimeout(() => processQueue(), 100)
+      } else {
+        processQueueRunning = false
+      }
     }
     return
   }
@@ -423,7 +473,11 @@ function processQueue(): void {
     log("mine done")
   }
 
-  setTimeout(() => processQueue(), 100)
+  if (miningQueue.length > 0) {
+    setTimeout(() => processQueue(), 100)
+  } else {
+    processQueueRunning = false
+  }
 }
 
 async function mineSingleSession(sessionId: string): Promise<void> {
@@ -496,20 +550,41 @@ if (miningLock) {
   log(`mining locked, queueing session ${sessionId}`)
   miningQueue.push({ sessionId, filePath, retries: 0 })
   log("Queued, retrying")
+  if (!processQueueRunning) processQueue()
   return
 }
 
 miningLock = true
 log(`mining session ${sessionId}`)
 
-const result = runMineSync(filePath, buildWingArgs)
-miningLock = false
+const configPath = join(process.env.HOME || homedir(), ".mempalace", "config.json")
+let lockFile = ""
+try {
+  const palacePath = JSON.parse(readFileSync(configPath, "utf-8")).palace_path
+  if (palacePath) {
+    const lock = acquireMineLock(palacePath)
+    if (!lock.acquired) {
+      log(`inter-process lock held for session ${sessionId}, queueing`)
+      miningLock = false
+      miningQueue.push({ sessionId, filePath, retries: 0 })
+      if (!processQueueRunning) processQueue()
+      return
+    }
+    lockFile = lock.lockFile
+  }
+} catch (e) {
+  log(`inter-process lock config error: ${e}`)
+}
 
-if (result.retry) {
-  miningQueue.push({ sessionId, filePath, retries: 1 })
+const result = await runMineAsync(filePath, buildWingArgs)
+  miningLock = false
+  releaseMineLock(lockFile)
+
+  if (result.retry) {
+    miningQueue.push({ sessionId, filePath, retries: 1 })
   log("Queued, retrying")
   if (showToast) showToast(`Mining queued, retrying...`, "info")
-  setTimeout(() => processQueue(), RETRY_DELAY_MS)
+  setTimeout(() => processQueue(), computeRetryDelay(1))
 } else if (!result.success) {
   log(`mine error: ${result.error}`)
   if (showToast) showToast(`Erreur sync: ${result.error?.slice(0, 50)}`, "error")
@@ -520,7 +595,9 @@ if (result.retry) {
   log("mine done")
 }
 
-setTimeout(() => processQueue(), 100)
+if (miningQueue.length > 0) {
+  setTimeout(() => processQueue(), 100)
+}
 }
 
 function mineProjectFiles(projectDir: string): void {
@@ -576,7 +653,7 @@ function mineProjectFiles(projectDir: string): void {
   if (showToast) showToast(`Projet: mining ${toMine.map(f => basename(f)).join(", ")}`, "info")
   try {
     const args = ["mine", tmpDir, "--mode", "projects", ...buildWingArgs()]
-    execFileSync(MEMPALACE_BIN, args, { encoding: "utf-8", timeout: 10000, killSignal: "SIGKILL", stdio: "pipe" })
+    execFileSync("nice", ["-n", "10", MEMPALACE_BIN, ...args], { encoding: "utf-8", timeout: 10000, killSignal: "SIGKILL", stdio: "pipe" })
     log(`mined project files (${toMine.map(f => basename(f)).join(", ")})`)
   } catch (err: any) {
     log(`mine project files error: ${err.message?.slice(0, 100)}`)

@@ -35,6 +35,9 @@ export interface PluginConfig {
   autoMinedFiles: string[]
   autoMineFilesCaseSensitive: boolean
   autoMinedFilesDelayMs: number
+  mineTimeoutMs?: number
+  maxRetries?: number
+  retryDelayMs?: number
   fileLogging: boolean
   plugins: PluginsConfig
 }
@@ -64,6 +67,9 @@ const DEFAULTS: PluginConfig = {
   autoMinedFiles: ["README.md", "AGENTS.md"],
   autoMineFilesCaseSensitive: false,
   autoMinedFilesDelayMs: 30000,
+  mineTimeoutMs: 30000,
+  maxRetries: 3,
+  retryDelayMs: 2000,
   fileLogging: false,
   plugins: {
     ohMyOpenAgent: {
@@ -116,6 +122,12 @@ export function loadPluginConfig(filePath: string): PluginConfig {
       config.autoMineFilesCaseSensitive = raw.autoMineFilesCaseSensitive
     if (typeof raw?.autoMinedFilesDelayMs === "number" && raw.autoMinedFilesDelayMs > 0)
       config.autoMinedFilesDelayMs = raw.autoMinedFilesDelayMs
+    if (typeof raw?.mineTimeoutMs === "number")
+      config.mineTimeoutMs = raw.mineTimeoutMs >= 1000 ? raw.mineTimeoutMs : 30000
+    if (typeof raw?.maxRetries === "number" && raw.maxRetries >= 0)
+      config.maxRetries = raw.maxRetries
+    if (typeof raw?.retryDelayMs === "number" && raw.retryDelayMs >= 0)
+      config.retryDelayMs = raw.retryDelayMs
     if (typeof raw?.fileLogging === "boolean")
       config.fileLogging = raw.fileLogging
 
