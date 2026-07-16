@@ -45,7 +45,7 @@ const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 2000
 let miningQueue: QueueItem[] = []
 let miningLock = false
-let wakeupDone = false
+const wakeupDoneSessions = new Set<string>()
 let wakeUpCache: string | null = null
 let showToast: ((msg: string, variant?: "info" | "success" | "error") => void) | null = null
 let lastSearchTs = 0
@@ -569,6 +569,7 @@ export default (async (input: any) => {
   const workspaceDirRaw = input.worktree || input.directory || process.cwd()
   const resolvedDir = resolve(workspaceDirRaw)
   currentWing = getWingFromPath(resolvedDir)
+  wakeUpCache = null
 
   mkdirSync(OUT_DIR, { recursive: true })
   config = loadPluginConfig(pluginConfigPath)
@@ -617,8 +618,8 @@ export default (async (input: any) => {
       if (autoInject) {
         diagLog(`CHAT.MESSAGE AUTOINJECT: starting injection`)
         const prefixTexts: string[] = []
-        if (!wakeupDone) {
-          wakeupDone = true
+        if (sessionId && !wakeupDoneSessions.has(sessionId)) {
+          wakeupDoneSessions.add(sessionId)
           if (identity) {
             prefixTexts.push(`[MemPalace Identity]\n${identity}\n[/MemPalace Identity]`)
           }

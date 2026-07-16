@@ -30,24 +30,27 @@ function buildL1Block(text: string, maxChars = 900, wing?: string): string {
  * Simulate the chat.message hook logic from src/index.ts.
  * The real hook receives output.parts — this function replicates the
  * injection part in isolation.
+ *
+ * wakeupDoneSessions tracks which session IDs have already received
+ * identity+L1 injection (per-session, not global).
  */
 function applyChatMessage(
   parts: any[],
   identity: string,
   autoInject: boolean,
-  wakeupDone: boolean,
+  wakeupDoneSessions: Set<string>,
   searchResult: string,
   wakeUpResult = "",
   scopeSearchToWing = false,
   currentWing = "",
-): { parts: any[]; wakeupDone: boolean } {
-  if (!autoInject) return { parts, wakeupDone }
+  sessionId = "test-session",
+): { parts: any[]; wakeupDoneSessions: Set<string> } {
+  if (!autoInject) return { parts, wakeupDoneSessions }
 
   const prefixBlocks: string[] = []
 
-  let newWakeupDone = wakeupDone
-  if (!newWakeupDone) {
-    newWakeupDone = true
+  if (sessionId && !wakeupDoneSessions.has(sessionId)) {
+    wakeupDoneSessions.add(sessionId)
     if (identity) {
       prefixBlocks.push(buildIdentityBlock(identity))
     }
@@ -70,7 +73,7 @@ function applyChatMessage(
     }
   }
 
-  return { parts, wakeupDone: newWakeupDone }
+  return { parts, wakeupDoneSessions }
 }
 
 // ---------------------------------------------------------------------------
@@ -81,49 +84,61 @@ describe("Identity injection @injection", () => {
   it("injects visible [MemPalace Identity] text on the first user message", () => {
     const parts = [{ type: "text", text: "What is my identity?" }]
 
-    const result = applyChatMessage(parts, "I am Test User.", true, false, "")
+    const result = applyChatMessage(parts, "I am Test User.", true, new Set(), "")
 
     expect(result.parts.length).toBe(1)
     const text = result.parts[0].text
     expect(text.startsWith("[MemPalace Identity]")).toBe(true)
     expect(text).toContain("I am Test User.")
     expect(text.endsWith("What is my identity?")).toBe(true)
-    expect(result.wakeupDone).toBe(true)
+    expect(result.wakeupDoneSessions.size).toBe(1)
   })
 
-  it("only injects identity and L1 once when wakeupDone is already true", () => {
+  it("only injects identity and L1 once per session", () => {
     const parts = [{ type: "text", text: "Tell me more." }]
+    const done = new Set(["test-session"])
 
-    const result = applyChatMessage(parts, "I am Test User.", true, true, "", "L1 content")
+    const result = applyChatMessage(parts, "I am Test User.", true, done, "", "L1 content")
 
     expect(result.parts[0].text).not.toContain("[MemPalace Identity]")
     expect(result.parts[0].text).not.toContain("[MemPalace L1]")
     expect(result.parts[0].text).toBe("Tell me more.")
-    expect(result.wakeupDone).toBe(true)
+  })
+
+  it("injects identity for a new session even after a previous session was done", () => {
+    const done = new Set(["session-a"])
+    const parts = [{ type: "text", text: "New session message" }]
+
+    const result = applyChatMessage(parts, "I am Test User.", true, done, "", "L1 content", false, "", "session-b")
+
+    expect(result.parts[0].text).toContain("[MemPalace Identity]")
+    expect(result.parts[0].text).toContain("I am Test User.")
+    expect(result.wakeupDoneSessions.has("session-b")).toBe(true)
+    expect(result.wakeupDoneSessions.has("session-a")).toBe(true)
   })
 
   it("does not inject identity when autoInject is false", () => {
     const parts = [{ type: "text", text: "Who am I?" }]
 
-    const result = applyChatMessage(parts, "I am Test User.", false, false, "")
+    const result = applyChatMessage(parts, "I am Test User.", false, new Set(), "")
 
     expect(result.parts.length).toBe(1)
-    expect(result.wakeupDone).toBe(false)
+    expect(result.wakeupDoneSessions.size).toBe(0)
   })
 
   it("does not inject identity when identity string is empty", () => {
     const parts = [{ type: "text", text: "Who am I?" }]
 
-    const result = applyChatMessage(parts, "", true, false, "")
+    const result = applyChatMessage(parts, "", true, new Set(), "")
 
     expect(result.parts.length).toBe(1)
-    expect(result.wakeupDone).toBe(true)
+    expect(result.wakeupDoneSessions.size).toBe(1)
   })
 
   it("injects L1 wake-up context alongside identity on first message", () => {
     const parts = [{ type: "text", text: "What's the project about?" }]
 
-    const result = applyChatMessage(parts, "I am Dehi.", true, false, "", "# L1 — Project context here")
+    const result = applyChatMessage(parts, "I am Dehi.", true, new Set(), "", "# L1 — Project context here")
 
     const text = result.parts[0].text
     expect(text.startsWith("[MemPalace Identity]")).toBe(true)
@@ -131,13 +146,13 @@ describe("Identity injection @injection", () => {
     expect(text).toContain("Project context here")
     expect(text).toContain("I am Dehi.")
     expect(text.endsWith("What's the project about?")).toBe(true)
-    expect(result.wakeupDone).toBe(true)
+    expect(result.wakeupDoneSessions.size).toBe(1)
   })
 
   it("injects wing-scoped L1 title when scopeSearchToWing is true", () => {
     const parts = [{ type: "text", text: "What's the project about?" }]
 
-    const result = applyChatMessage(parts, "I am Dehi.", true, false, "", "# L1 — Wing context", true, "wing_my-project")
+    const result = applyChatMessage(parts, "I am Dehi.", true, new Set(), "", "# L1 — Wing context", true, "wing_my-project")
 
     const text = result.parts[0].text
     expect(text).toContain("[MemPalace L1 : wing_my-project]")
@@ -145,7 +160,7 @@ describe("Identity injection @injection", () => {
     expect(text).toContain("Wing context")
     expect(text).toContain("[MemPalace Identity]")
     expect(text.endsWith("What's the project about?")).toBe(true)
-    expect(result.wakeupDone).toBe(true)
+    expect(result.wakeupDoneSessions.size).toBe(1)
   })
 })
 
@@ -157,7 +172,7 @@ describe("Memory search and injection @injection @search", () => {
   it("injects [MemPalace Recall] text when search results exist", () => {
     const parts = [{ type: "text", text: "What do you remember about me?" }]
 
-    const result = applyChatMessage(parts, "I am Test User.", true, true, "User likes blue and works on E2E testing.")
+    const result = applyChatMessage(parts, "I am Test User.", true, new Set(["test-session"]), "User likes blue and works on E2E testing.")
 
     const text = result.parts[0].text
     expect(text).toContain("[MemPalace Recall]")
@@ -177,7 +192,7 @@ describe("Memory search and injection @injection @search", () => {
   it("does not inject recall when search result is empty", () => {
     const parts = [{ type: "text", text: "Any memories?" }]
 
-    const result = applyChatMessage(parts, "I am Test User.", true, true, "")
+    const result = applyChatMessage(parts, "I am Test User.", true, new Set(["test-session"]), "")
 
     expect(result.parts[0].text).not.toContain("[MemPalace Recall]")
     expect(result.parts[0].text).toBe("Any memories?")
@@ -192,7 +207,7 @@ describe("Short message skips search @injection @search", () => {
   it("injects identity but skips recall for messages under 15 characters", () => {
     const parts = [{ type: "text", text: "Hi" }]
 
-    const result = applyChatMessage(parts, "I am Test User.", true, false, "")
+    const result = applyChatMessage(parts, "I am Test User.", true, new Set(), "")
 
     expect(result.parts.length).toBe(1)
     const text = result.parts[0].text
@@ -200,7 +215,7 @@ describe("Short message skips search @injection @search", () => {
     expect(text).toContain("I am Test User.")
     expect(text).not.toContain("[MemPalace Recall]")
     expect(text.endsWith("Hi")).toBe(true)
-    expect(result.wakeupDone).toBe(true)
+    expect(result.wakeupDoneSessions.size).toBe(1)
   })
 })
 
