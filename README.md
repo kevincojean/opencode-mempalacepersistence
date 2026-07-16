@@ -45,10 +45,10 @@ This file is loaded by the plugin — no need to add it to `instructions` in ope
 ### 3. MemPalace (if not already installed)
 
 ```bash
-# Install (requires mempalace>=3.3.5 for HNSW corruption fix)
-uv tool install "mempalace>=3.3.5"
+# Install (requires mempalace>=3.4.0)
+uv tool install "mempalace>=3.4.0"
 # or
-pipx install "mempalace>=3.3.5"
+pipx install "mempalace>=3.4.0"
 
 # Create palace
 mempalace init ~/opencode-memory
@@ -56,6 +56,8 @@ mempalace init ~/opencode-memory
 # Configure MCP
 mempalace mcp
 ```
+
+> **⚠️ Warning**: MemPalace versions prior to 3.4.0 have a bug that causes the HNSW vector index to become corrupted, making up to 47% of stored memories invisible to semantic search. If you're using an older version, upgrade immediately and run `mempalace repair` to rebuild the index.
 
 The `mempalace mcp` command gives you the exact MCP setup string for your configuration.
 
@@ -241,10 +243,10 @@ And keep `"~/.mempalace/identity.txt"` in `instructions` in opencode.json since 
 | Depends on model discipline | No | Yes |
 
 ```bash
-# Install (requires mempalace>=3.3.5 for HNSW corruption fix)
-uv tool install "mempalace>=3.3.5"
+# Install (requires mempalace>=3.4.0)
+uv tool install "mempalace>=3.4.0"
 # or
-pipx install "mempalace>=3.3.5"
+pipx install "mempalace>=3.4.0"
 
 # Create palace
 mempalace init ~/opencode-memory
