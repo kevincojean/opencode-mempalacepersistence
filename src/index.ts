@@ -1,14 +1,36 @@
 import { execFileSync, execFile } from "child_process"
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync, statSync, readdirSync, realpathSync } from "fs"
 import { homedir } from "os"
-import { join, basename, resolve } from "path"
+import { join, basename, resolve, dirname } from "path"
 import { createHash } from "crypto"
 import type { Plugin } from "@opencode-ai/plugin"
 import { loadPluginConfig, type PluginConfig } from "./config.js"
 import { stripInjectedPrompts as stripOmoPrompts } from "./plugins/oh-my-openagent.js"
 
 const HOME = process.env.HOME || homedir()
-const VENV_PYTHON = process.env.MEMPALACE_PYTHON ?? join(HOME, ".local/share/pipx/venvs/mempalace/bin/python3")
+
+function resolveVenvPython(): string {
+  if (process.env.MEMPALACE_PYTHON) return process.env.MEMPALACE_PYTHON
+  try {
+    const mempalaceBin = join(HOME, ".local", "bin", "mempalace")
+    if (existsSync(mempalaceBin)) {
+      const venvPython = join(dirname(realpathSync(mempalaceBin)), "python3")
+      if (existsSync(venvPython)) return venvPython
+    }
+  } catch {}
+  for (const p of [
+    join(HOME, ".mempalace", ".venv", "bin", "python3"),
+    join(HOME, ".local", "share", "pipx", "venvs", "mempalace", "bin", "python3"),
+    join(HOME, ".local", "share", "pipx", "venvs", "mempalace", "bin", "python"),
+  ]) {
+    try {
+      if (existsSync(p)) return realpathSync(p)
+    } catch {}
+  }
+  return "python3"
+}
+
+const VENV_PYTHON = resolveVenvPython()
 const MEMPALACE_BIN = process.env.MEMPALACE_BIN_PATH ?? join(HOME, ".local/bin/mempalace")
 const OPENCODE_DB = process.env.OPENCODE_DB_PATH ?? join(HOME, ".local/share/opencode/opencode.db")
 const PLUGIN_CONFIG = process.env.MEMPALACE_PLUGIN_CONFIG ?? join(HOME, ".mempalace/plugin-config.json")
@@ -49,6 +71,26 @@ let miningQueue: QueueItem[] = []
 let miningLock = false
 const wakeupDoneSessions = new Set<string>()
 let processQueueRunning = false
+
+// Waiters that resolve when the mine for a session reaches a terminal state.
+// Lets the session.idle hook await full drain (incl. queued retries) before returning.
+const mineWaiters = new Map<string, Array<() => void>>()
+
+function waitForMine(sessionId: string): Promise<void> {
+  return new Promise((resolve) => {
+    const list = mineWaiters.get(sessionId) ?? []
+    list.push(resolve)
+    mineWaiters.set(sessionId, list)
+  })
+}
+
+function signalMineDone(sessionId: string): void {
+  const list = mineWaiters.get(sessionId)
+  if (list) {
+    mineWaiters.delete(sessionId)
+    for (const resolve of list) resolve()
+  }
+}
 let wakeUpCache: string | null = null
 let showToast: ((msg: string, variant?: "info" | "success" | "error") => void) | null = null
 let lastSearchTs = 0
@@ -457,12 +499,12 @@ async function processQueue(): Promise<void> {
       miningQueue.unshift(item)
       log("Queued, retrying")
       if (showToast) showToast(`Mining queued, retrying...`, "info")
-      setTimeout(() => processQueue(), computeRetryDelay(item.retries))
-      // processQueueRunning stays true during retry wait
+      setTimeout(() => { processQueueRunning = false; processQueue() }, computeRetryDelay(item.retries))
     } else {
       log(`mine failed after ${config.maxRetries ?? 3} attempts`)
       if (showToast) showToast(`Erreur sync: mining failed after 3 attempts`, "error")
       try { unlinkSync(item.filePath) } catch {}
+      signalMineDone(item.sessionId)
       if (miningQueue.length > 0) {
         setTimeout(() => processQueue(), 100)
       } else {
@@ -481,6 +523,7 @@ async function processQueue(): Promise<void> {
     if (showToast) showToast(`Session sauvegardée`, "success")
     log("mine done")
   }
+  signalMineDone(item.sessionId)
 
   if (miningQueue.length > 0) {
     setTimeout(() => processQueue(), 100)
@@ -521,13 +564,15 @@ print(json.dumps(texts))
 } catch (e: any) {
   log(`mine db query error: ${e?.message?.slice(0, 200)}`)
   diagLog(`MINE DB QUERY ERROR: ${e?.message?.slice(0, 500)}`)
+  signalMineDone(sessionId)
   return Promise.resolve()
 }
 
 let msgList: Array<{ role: string; text: string; ts: number }>
-try { msgList = JSON.parse(msgs) } catch { return Promise.resolve() }
+try { msgList = JSON.parse(msgs) } catch { signalMineDone(sessionId); return Promise.resolve() }
 if (!msgList || msgList.length < 1) {
   log(`no messages found for session ${sessionId}`)
+  signalMineDone(sessionId)
   return Promise.resolve()
 }
 
@@ -547,7 +592,7 @@ for (const m of msgList) {
 }
 
 const content = lines.join("\n").trim()
-if (!content) return Promise.resolve()
+if (!content) { signalMineDone(sessionId); return Promise.resolve() }
 
 mkdirSync(OUT_DIR, { recursive: true })
 const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 12)
@@ -605,10 +650,12 @@ const result = await runMineAsync(filePath, buildWingArgs)
   log(`mine error: ${result.error}`)
   if (showToast) showToast(`Erreur sync: ${result.error?.slice(0, 50)}`, "error")
   try { unlinkSync(filePath) } catch {}
+  signalMineDone(sessionId)
 } else {
   try { unlinkSync(filePath) } catch {}
   if (showToast) (showToast as any)(`Session sauvegardée`, "success")
   log("mine done")
+  signalMineDone(sessionId)
 }
 
 if (miningQueue.length > 0) {
@@ -773,8 +820,11 @@ export default (async (input: any) => {
       if (!sid) { log(`idle event - no sessionId (event.type=${event?.type}, inputKeys=${Object.keys(input || {}).join(",")}), skipping mine`); return }
       log(`idle event - mine session ${sid}`)
       diagLog(`EVENT MINING: sessionId=${sid}`)
+      const drain = waitForMine(sid)
       await mineSingleSession(sid)
       diagLog(`EVENT MINING DONE`)
+      await drain
+      diagLog(`EVENT MINING DRAINED`)
       if (config.autoMinedFiles.length > 0) {
         setTimeout(() => mineProjectFiles(resolvedDir), config.autoMinedFilesDelayMs)
       }

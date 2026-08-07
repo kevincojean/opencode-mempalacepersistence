@@ -138,11 +138,12 @@ export async function opencodeDB(env: TestEnv, sql: string): Promise<Record<stri
 
 /**
  * Run `mempalace search` against the test palace.
+ * Uses `--palace` explicitly: mempalace ignores MEMPALACE_CONFIG, so without it
+ * the search would hit the real `~/.mempalace/palace` instead of the sandbox.
  */
 export async function mempalaceSearch(env: TestEnv, query: string): Promise<string> {
   try {
-    const result = await execa(MEMPALACE_BIN, ["search", query, "--results", "5"], {
-      env: { MEMPALACE_CONFIG: join(env.home, ".mempalace/config.json") },
+    const result = await execa(MEMPALACE_BIN, ["--palace", env.palace, "search", query, "--results", "5"], {
       timeout: 15_000,
     })
     return result.stdout
