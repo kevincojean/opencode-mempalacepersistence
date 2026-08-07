@@ -3,6 +3,7 @@ import { mkdir, writeFile, rm } from "fs/promises"
 import { join, basename } from "path"
 import { tmpdir } from "os"
 import { randomUUID } from "crypto"
+import { sanitizeRecallText } from "../src/index.js"
 
 // ---------------------------------------------------------------------------
 // We test the plugin's injection logic directly rather than loading the
@@ -745,5 +746,51 @@ describe("Recall quality filters @search @config", () => {
 
       expect(filtered).toHaveLength(0)
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// L2 recall output sanitization - sanitizeRecallText (real source import)
+// ---------------------------------------------------------------------------
+
+describe("sanitizeRecallText @search", () => {
+  it("given recall text with runs of blank lines, when sanitizing, then no two newlines are adjacent", () => {
+    const raw = "[1] wing/room (cos:0.9 bm25:1.0)\nline one\n\n\nline two\n\nline three"
+
+    const sanitized = sanitizeRecallText(raw)
+
+    expect(sanitized).toBe("[1] wing/room (cos:0.9 bm25:1.0)\nline one\nline two\nline three")
+    expect(sanitized).not.toMatch(/\n\n/)
+  })
+
+  it("given recall text with whitespace-only lines, when sanitizing, then blank lines are dropped", () => {
+    const raw = "line one\n   \n\t\nline two"
+
+    const sanitized = sanitizeRecallText(raw)
+
+    expect(sanitized).toBe("line one\nline two")
+    expect(sanitized).not.toMatch(/\n\n/)
+  })
+
+  it("given recall text with single newlines only, when sanitizing, then text is unchanged", () => {
+    const raw = "line one\nline two"
+
+    expect(sanitizeRecallText(raw)).toBe("line one\nline two")
+  })
+
+  it("given empty recall text, when sanitizing, then empty string is returned", () => {
+    expect(sanitizeRecallText("")).toBe("")
+  })
+
+  it("given recall text ending with newline runs, when sanitizing, then no trailing blank lines remain", () => {
+    const raw = "line one\n\n\n"
+
+    expect(sanitizeRecallText(raw)).toBe("line one")
+  })
+
+  it("given recall text with trailing whitespace on lines, when sanitizing, then trailing whitespace is trimmed", () => {
+    const raw = "line one   \nline two\t"
+
+    expect(sanitizeRecallText(raw)).toBe("line one\nline two")
   })
 })

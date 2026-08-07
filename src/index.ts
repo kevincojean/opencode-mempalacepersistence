@@ -217,6 +217,14 @@ function rebuildSearchOutput(results: ParsedResult[]): string {
     .join("\n---\n")
 }
 
+export function sanitizeRecallText(text: string): string {
+  return text
+    .split("\n")
+    .map(line => line.trimEnd())
+    .filter(line => line.trim() !== "")
+    .join("\n")
+}
+
 function mempalaceSearch(rawText: string): string {
   const now = Date.now()
   if (rawText.trim().length < config.minQueryLength) {
@@ -259,7 +267,7 @@ function mempalaceSearch(rawText: string): string {
     }
 
     const rebuilt = rebuildSearchOutput(filtered)
-    lastSearchResult = rebuilt.slice(0, config.maxSearchChars)
+    lastSearchResult = sanitizeRecallText(rebuilt).slice(0, config.maxSearchChars)
     diagLog(`L2 SEARCH SUCCESS: injecting ${lastSearchResult.length} chars`)
     return lastSearchResult
   } catch (err: any) {
