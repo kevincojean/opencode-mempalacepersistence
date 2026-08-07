@@ -443,12 +443,13 @@ function testParseSearchResults(output: string): ParsedResult[] {
     const lines = block.split("\n")
     let idx = 0
 
-    // For first block, skip header lines (=== lines + "Results for:" line + blank)
+    // For first block, skip header lines (=== lines + "Results for:" line + "Wing:" line + blank)
     if (bi === 0) {
       while (idx < lines.length && (
         lines[idx].trim() === "" ||
         lines[idx].startsWith("===") ||
-        lines[idx].includes("Results for:")
+        lines[idx].includes("Results for:") ||
+        lines[idx].includes("Wing:")
       )) idx++
     }
 
@@ -465,7 +466,7 @@ function testParseSearchResults(output: string): ParsedResult[] {
     idx++
 
     while (idx < lines.length && lines[idx].trim() === "") idx++
-    const match = lines[idx].trim().match(/cosine=([\d.]+)\s+bm25=([\d.]+)/)
+    const match = lines[idx].trim().match(/cosine_sim=([\d.]+)\s+bm25=([\d.]+)/)
     if (!match) continue
     idx++
 
@@ -512,7 +513,7 @@ function testRebuildSearchOutput(results: ParsedResult[], query: string): string
     return [
       `  [${i + 1}] ${r.wing} / ${r.room}`,
       `      Source: ${r.source}`,
-      `      Match:  cosine=${r.cosine.toFixed(3)}  bm25=${r.bm25.toFixed(3)}`,
+      `      Match:  cosine_sim=${r.cosine.toFixed(3)}  bm25=${r.bm25.toFixed(3)}`,
       "",
       indentedContent,
     ].join("\n")
@@ -534,7 +535,7 @@ function makeRawResult(
   return (
     `  [${n}] ${wing} / ${room}\n` +
     `      Source: ${source}\n` +
-    `      Match:  cosine=${cosine.toFixed(3)}  bm25=${bm25.toFixed(3)}\n\n` +
+    `      Match:  cosine_sim=${cosine.toFixed(3)}  bm25=${bm25.toFixed(3)}\n\n` +
     indented
   )
 }
@@ -653,7 +654,7 @@ describe("Recall quality filters @search @config", () => {
 
       expect(rebuilt).toContain('Results for: "test query"')
       expect(rebuilt).toContain("[1] oc_sessions / technical")
-      expect(rebuilt).toContain("cosine=0.800  bm25=1.500")
+      expect(rebuilt).toContain("cosine_sim=0.800  bm25=1.500")
       expect(rebuilt).toContain("Memory content")
       expect(rebuilt).toContain(RESULT_SEPARATOR.trim())
     })

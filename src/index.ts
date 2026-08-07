@@ -123,7 +123,7 @@ function extractSearchQuery(text: string): string {
   if (config.plugins.ohMyOpenAgent.stripInjectedPrompts) {
     cleaned = stripOmoPrompts(cleaned)
   }
-  cleaned = cleaned.replace(/\s+/g, " ").trim()
+  cleaned = cleaned.replace(/[""]/g, "").replace(/\s+/g, " ").trim()
   if (cleaned.length > MAX_QUERY_CHARS) {
     const truncated = cleaned.slice(0, MAX_QUERY_CHARS)
     const lastSpace = truncated.lastIndexOf(" ")
@@ -158,12 +158,13 @@ function parseSearchResults(output: string): ParsedResult[] {
     const lines = block.split("\n")
     let idx = 0
 
-    // For first block, skip header lines (=== lines + "Results for:" line + blank)
+    // For first block, skip header lines (=== lines + "Results for:" line + "Wing:" line + blank)
     if (bi === 0) {
       while (idx < lines.length && (
         lines[idx].trim() === "" ||
         lines[idx].startsWith("===") ||
-        lines[idx].includes("Results for:")
+        lines[idx].includes("Results for:") ||
+        lines[idx].includes("Wing:")
       )) idx++
     }
 
@@ -181,7 +182,7 @@ function parseSearchResults(output: string): ParsedResult[] {
     idx++
 
     while (idx < lines.length && lines[idx].trim() === "") idx++
-    const match = lines[idx].trim().match(/cosine=([\d.]+)\s+bm25=([\d.]+)/)
+    const match = lines[idx].trim().match(/cosine_sim=([\d.]+)\s+bm25=([\d.]+)/)
     if (!match) continue
     idx++
 
@@ -278,14 +279,14 @@ function filterWakeUpLines(output: string): string {
   const lines = output.split("\n")
   const result: string[] = []
   for (const line of lines) {
-    const m = line.match(/Match:\s*cosine=([\d.]+)\s+bm25=([\d.]+)/)
+    const m = line.match(/Match:\s*cosine_sim=([\d.]+)\s+bm25=([\d.]+)/)
     if (m) {
       const cosine = parseFloat(m[1])
       const bm25 = parseFloat(m[2])
       if (cosine < cosineSimilarityThreshold || bm25 < bm25Threshold) {
         continue
       }
-      result.push(line.replace(/Match:\s*cosine=[\d.]+\s+bm25=[\d.]+/, "").trimEnd())
+      result.push(line.replace(/Match:\s*cosine_sim=[\d.]+\s+bm25=[\d.]+/, "").trimEnd())
     } else {
       result.push(line)
     }
