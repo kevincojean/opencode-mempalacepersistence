@@ -6,6 +6,8 @@ An OpenCode plugin that automatically saves every conversation to MemPalace and 
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+> **⚠️ Backend warning**: opencode-mempalace-persistence works **really badly** with MemPalace's default backend, **ChromaDB**. This project works **well** with **Qdrant** as the vector store backend. Configure MemPalace to use Qdrant before relying on this plugin. See [doc/chromadb-corruptions.md](doc/chromadb-corruptions.md) for why.
+
 ---
 
 ## How it works in 3 seconds
