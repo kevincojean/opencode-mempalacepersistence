@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto"
 import { mkdir, writeFile, symlink, rm } from "fs/promises"
 import { existsSync, realpathSync } from "fs"
-import { join } from "path"
+import { join, dirname } from "path"
 import { startTestProvider } from "./test-provider.js"
 
 export interface TestEnvConfig {
@@ -33,6 +33,13 @@ function resolveMempalaceBin(): string {
 }
 
 function resolveMempalacePython(): string {
+  const bin = resolveMempalaceBin()
+  if (bin !== "mempalace") {
+    const venvPython3 = join(dirname(bin), "python3")
+    const venvPython = join(dirname(bin), "python")
+    if (existsSync(venvPython3)) return realpathSync(venvPython3)
+    if (existsSync(venvPython)) return realpathSync(venvPython)
+  }
   const candidates = [
     join(process.env.HOME ?? "/home", ".local", "share", "pipx", "venvs", "mempalace", "bin", "python3"),
     join(process.env.HOME ?? "/home", ".local", "share", "pipx", "venvs", "mempalace", "bin", "python"),

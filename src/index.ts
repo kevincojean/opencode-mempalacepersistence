@@ -494,7 +494,9 @@ async function mineSingleSession(sessionId: string): Promise<void> {
   // ... rest of the python query logic ...
 
 
-const msgs = runPython(`
+let msgs: string
+try {
+  msgs = runPython(`
 import sqlite3, json
 db = sqlite3.connect(${JSON.stringify(OPENCODE_DB)})
 rows = db.execute("""
@@ -516,6 +518,11 @@ for (mid, mts, mdata_raw) in rows:
 db.close()
 print(json.dumps(texts))
 `)
+} catch (e: any) {
+  log(`mine db query error: ${e?.message?.slice(0, 200)}`)
+  diagLog(`MINE DB QUERY ERROR: ${e?.message?.slice(0, 500)}`)
+  return Promise.resolve()
+}
 
 let msgList: Array<{ role: string; text: string; ts: number }>
 try { msgList = JSON.parse(msgs) } catch { return Promise.resolve() }
