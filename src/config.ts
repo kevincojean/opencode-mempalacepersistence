@@ -19,6 +19,12 @@ export interface PluginsConfig {
   ohMyOpenAgent: OhMyOpenAgentPluginConfig
 }
 
+export interface SanitizeSearchQueryOptions {
+  stripSymbols: boolean
+  removeShortWords: boolean
+  minWordLength: number
+}
+
 export interface PluginConfig {
   skipCommands: boolean
   maxSearchChars: number
@@ -40,6 +46,7 @@ export interface PluginConfig {
   retryDelayMs?: number
   fileLogging: boolean
   plugins: PluginsConfig
+  sanitizeSearchQuery: SanitizeSearchQueryOptions
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +83,11 @@ const DEFAULTS: PluginConfig = {
       stripInjectedPrompts: false,
     },
   },
+  sanitizeSearchQuery: {
+    stripSymbols: true,
+    removeShortWords: true,
+    minWordLength: 3,
+  },
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +99,7 @@ export function loadPluginConfig(filePath: string): PluginConfig {
     ...DEFAULTS,
     l1RecallCustomWakeUp: { ...DEFAULTS.l1RecallCustomWakeUp },
     plugins: { ohMyOpenAgent: { ...DEFAULTS.plugins.ohMyOpenAgent } },
+    sanitizeSearchQuery: { ...DEFAULTS.sanitizeSearchQuery },
   }
 
   if (!existsSync(filePath)) return config
@@ -151,6 +164,17 @@ export function loadPluginConfig(filePath: string): PluginConfig {
         if (typeof oma.stripInjectedPrompts === "boolean")
           config.plugins.ohMyOpenAgent.stripInjectedPrompts = oma.stripInjectedPrompts
       }
+    }
+
+    // Nested sanitizeSearchQuery config
+    if (typeof raw?.sanitizeSearchQuery === "object" && raw.sanitizeSearchQuery !== null) {
+      const s = raw.sanitizeSearchQuery
+      if (typeof s.stripSymbols === "boolean")
+        config.sanitizeSearchQuery.stripSymbols = s.stripSymbols
+      if (typeof s.removeShortWords === "boolean")
+        config.sanitizeSearchQuery.removeShortWords = s.removeShortWords
+      if (typeof s.minWordLength === "number" && s.minWordLength >= 0 && Number.isFinite(s.minWordLength))
+        config.sanitizeSearchQuery.minWordLength = Math.floor(s.minWordLength)
     }
   } catch {}
 

@@ -104,6 +104,11 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
   "l2RecallCosineSimilarityThreshold": 0.7,
   "l2RecallBm25Threshold": 0.0,
   "l2RecallMinContentLength": 50,
+  "sanitizeSearchQuery": {
+    "stripSymbols": true,
+    "removeShortWords": true,
+    "minWordLength": 3
+  },
   "mineExtractGeneral": true,
   "autoMinedFiles": ["README.md", "AGENTS.md"],
   "autoMineFilesCaseSensitive": false,
@@ -134,6 +139,9 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
 | `l2RecallCosineSimilarityThreshold` | `0.7` | Minimum cosine similarity to include a search result. Results below this threshold are dropped. Set to `0` to disable. |
 | `l2RecallBm25Threshold` | `0.0` | Minimum BM25 (keyword overlap) score to include a result. Default `0` means no BM25 filtering. Raise to e.g. `0.5` to require keyword overlap. |
 | `l2RecallMinContentLength` | `50` | Minimum character length of the content text to include a result. Filters out short boilerplate like "Done." or "Here's what I did." |
+| `sanitizeSearchQuery.stripSymbols` | `true` | When `true`, strips symbols (non-word, non-space characters like punctuation) from the user message before sending it as a `mempalace search` query. Improves recall quality by removing noise that dilutes the embedding. Set to `false` to disable. |
+| `sanitizeSearchQuery.removeShortWords` | `true` | When `true`, drops words whose length is less than or equal to `sanitizeSearchQuery.minWordLength` from the search query. Short words (articles, prepositions, pronouns) rarely help semantic recall and add noise. Set to `false` to keep all words. |
+| `sanitizeSearchQuery.minWordLength` | `3` | The character-length threshold for `sanitizeSearchQuery.removeShortWords`. Words with `length <= minWordLength` are dropped. With the default `3`, words of length `1`, `2`, or `3` (e.g., "I", "am", "the", "foo") are removed. Set higher (e.g., `5`) to be more aggressive, or lower (e.g., `1`) to only drop single-character tokens. |
 | `mineExtractGeneral` | `true` | When `true`, appends `--extract general` to the `mempalace mine --mode convos` command. This auto-classifies mined conversations into rooms (decisions, milestones, problems) instead of dumping everything into `technical`. |
 | `autoMinedFiles` | `["README.md", "AGENTS.md"]` | Array of filenames to mine from the project root into MemPalace (using `--mode projects`) on `session.idle`. Seeds L1 with the project's overarching story. Set to `[]` to disable. Files are matched case-insensitively by default. |
 | `autoMineFilesCaseSensitive` | `false` | When `true`, filenames in `autoMinedFiles` are matched case-sensitively. |

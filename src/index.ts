@@ -4,7 +4,7 @@ import { homedir } from "os"
 import { join, basename, resolve, dirname } from "path"
 import { createHash } from "crypto"
 import type { Plugin } from "@opencode-ai/plugin"
-import { loadPluginConfig, type PluginConfig } from "./config.js"
+import { loadPluginConfig, type PluginConfig, type SanitizeSearchQueryOptions } from "./config.js"
 import { stripInjectedPrompts as stripOmoPrompts } from "./plugins/oh-my-openagent.js"
 
 const HOME = process.env.HOME || homedir()
@@ -160,12 +160,24 @@ function buildWingArgs(): string[] {
 
 const MAX_QUERY_CHARS = 200
 
+export function sanitizeSearchQuery(text: string, opts: SanitizeSearchQueryOptions): string {
+  let s = text
+  if (opts.stripSymbols) {
+    s = s.replace(/[^\w\s]/g, "")
+  }
+  if (opts.removeShortWords) {
+    s = s.split(/\s+/).filter(w => w.length > opts.minWordLength).join(" ")
+  }
+  return s.replace(/\s+/g, " ").trim()
+}
+
 function extractSearchQuery(text: string): string {
   let cleaned = text
   if (config.plugins.ohMyOpenAgent.stripInjectedPrompts) {
     cleaned = stripOmoPrompts(cleaned)
   }
   cleaned = cleaned.replace(/[""]/g, "").replace(/\s+/g, " ").trim()
+  cleaned = sanitizeSearchQuery(cleaned, config.sanitizeSearchQuery)
   if (cleaned.length > MAX_QUERY_CHARS) {
     const truncated = cleaned.slice(0, MAX_QUERY_CHARS)
     const lastSpace = truncated.lastIndexOf(" ")
@@ -749,7 +761,7 @@ export default (async (input: any) => {
     showToast?.("fileLogging is ON — may slow things down with many disk writes. Turn it off if you don't need it.", "info")
   }
 
-  log(`loaded (autoInject: ${autoInject}, skipCommands: ${config.skipCommands}, maxSearchChars: ${config.maxSearchChars}, maxWakeUpChars: ${config.maxWakeUpChars}, maxSearchResults: ${config.maxSearchResults}, searchDebounceMs: ${config.searchDebounceMs}, minQueryLength: ${config.minQueryLength}, scopeSearchToWing: ${config.scopeSearchToWing}, l1CustomWakeUp: ${JSON.stringify(config.l1RecallCustomWakeUp)}, l2CosThresh: ${config.l2RecallCosineSimilarityThreshold}, l2Bm25Thresh: ${config.l2RecallBm25Threshold}, l2MinLen: ${config.l2RecallMinContentLength}, mineExtractGeneral: ${config.mineExtractGeneral}, autoMinedFiles: ${JSON.stringify(config.autoMinedFiles)}, caseSensitive: ${config.autoMineFilesCaseSensitive}, autoMinedDelay: ${config.autoMinedFilesDelayMs}, plugins: ${JSON.stringify(config.plugins)})`)
+  log(`loaded (autoInject: ${autoInject}, skipCommands: ${config.skipCommands}, maxSearchChars: ${config.maxSearchChars}, maxWakeUpChars: ${config.maxWakeUpChars}, maxSearchResults: ${config.maxSearchResults}, searchDebounceMs: ${config.searchDebounceMs}, minQueryLength: ${config.minQueryLength}, scopeSearchToWing: ${config.scopeSearchToWing}, l1CustomWakeUp: ${JSON.stringify(config.l1RecallCustomWakeUp)}, l2CosThresh: ${config.l2RecallCosineSimilarityThreshold}, l2Bm25Thresh: ${config.l2RecallBm25Threshold}, l2MinLen: ${config.l2RecallMinContentLength}, mineExtractGeneral: ${config.mineExtractGeneral}, autoMinedFiles: ${JSON.stringify(config.autoMinedFiles)}, caseSensitive: ${config.autoMineFilesCaseSensitive}, autoMinedDelay: ${config.autoMinedFilesDelayMs}, plugins: ${JSON.stringify(config.plugins)}, sanitizeSearchQuery: ${JSON.stringify(config.sanitizeSearchQuery)})`)
   diagLog(`PLUGIN INIT: autoInject=${autoInject}, wing=${currentWing}, dir=${resolvedDir}`)
 
   return {
