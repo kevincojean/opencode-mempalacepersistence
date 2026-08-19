@@ -95,30 +95,22 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
   "searchDebounceMs": 3000,
   "minQueryLength": 15,
   "scopeSearchToWing": false,
-  "l1RecallCustomWakeUp": {
-    "enabled": false,
-    "cosineSimilarityThreshold": 0.7,
-    "bm25Threshold": 0.0,
-    "minContentLength": 0
-  },
+  "l1RecallCustomWakeUp.enabled": false,
+  "l1RecallCustomWakeUp.cosineSimilarityThreshold": 0.7,
+  "l1RecallCustomWakeUp.bm25Threshold": 0.0,
+  "l1RecallCustomWakeUp.minContentLength": 0,
   "l2RecallCosineSimilarityThreshold": 0.7,
   "l2RecallBm25Threshold": 0.0,
   "l2RecallMinContentLength": 50,
-  "sanitizeSearchQuery": {
-    "stripSymbols": true,
-    "removeShortWords": true,
-    "minWordLength": 3
-  },
+  "sanitizeSearchQuery.stripSymbols": true,
+  "sanitizeSearchQuery.removeShortWords": true,
+  "sanitizeSearchQuery.minWordLength": 3,
   "mineExtractGeneral": true,
   "autoMinedFiles": ["README.md", "AGENTS.md"],
   "autoMineFilesCaseSensitive": false,
   "autoMinedFilesDelayMs": 30000,
   "fileLogging": false,
-  "plugins": {
-    "oh-my-openagent": {
-      "stripInjectedPrompts": true
-    }
-  }
+  "plugins.oh-my-openagent.stripInjectedPrompts": true
 }
 ```
 
@@ -149,6 +141,77 @@ The `plugin-config.json` supports optional tuning parameters beyond `autoInjectC
 | `fileLogging` | `false` | When `true`, enables file-based diagnostic logging to `/tmp/mempalace-diag.log` and (with `OPENCODE_MEMPALACE_DEBUG=1`) debug logging to `/tmp/opencode-mempalace.log`. Disabled by default — enable only for troubleshooting. |
 | `plugins.oh-my-openagent.stripInjectedPrompts` | `false` | When `true`, strips known oh-my-openagent orchestration boilerplate from user messages before sending them as `mempalace search` queries. See [Plugin compatibility](#plugin-compatibility) below. |
 
+> **Breaking change in 2.0.0**: Plugin config keys are now **flat dot-separated** (Java Spring properties style). Nested objects like `l1RecallCustomWakeUp: { enabled: true }` are no longer the canonical form. See [Migrating from v1.x](#migrating-from-v1x) below.
+
+---
+
+## Migrating from v1.x
+
+Plugin config keys are flat dot-separated strings (Java Spring properties style). Why this change?
+
+- **Easier to parse**: No nested objects, no structural ambiguity. Every key is a string. Tools like `jq`, `grep`, and `sed` work directly on the file.
+- **Easier to maintain**: Keys are self-describing. `sanitizeSearchQuery.minWordLength` reads as a complete address without indenting.
+- **Easier to write by hand**: No risk of forgetting a trailing comma inside a nested object, no risk of accidentally introducing a new sub-object name.
+- **Closer to other config formats** (Spring Boot, dotenv, etc.) - less mental switching between tools.
+
+### Before (v1.x, nested)
+
+```json
+{
+  "l1RecallCustomWakeUp": {
+    "enabled": true,
+    "cosineSimilarityThreshold": 0.8
+  },
+  "sanitizeSearchQuery": {
+    "stripSymbols": false,
+    "removeShortWords": true,
+    "minWordLength": 5
+  },
+  "plugins": {
+    "oh-my-openagent": {
+      "stripInjectedPrompts": true
+    }
+  }
+}
+```
+
+### After (v2.x, flat)
+
+```json
+{
+  "l1RecallCustomWakeUp.enabled": true,
+  "l1RecallCustomWakeUp.cosineSimilarityThreshold": 0.8,
+  "sanitizeSearchQuery.stripSymbols": false,
+  "sanitizeSearchQuery.removeShortWords": true,
+  "sanitizeSearchQuery.minWordLength": 5,
+  "plugins.oh-my-openagent.stripInjectedPrompts": true
+}
+```
+
+### What changed
+
+| v1.x (nested) | v2.x (flat) |
+|---|---|
+| `l1RecallCustomWakeUp.enabled` | `l1RecallCustomWakeUp.enabled` *(same shape)* |
+| `sanitizeSearchQuery.stripSymbols` | `sanitizeSearchQuery.stripSymbols` *(same shape)* |
+| `plugins.oh-my-openagent.stripInjectedPrompts` | `plugins.oh-my-openagent.stripInjectedPrompts` *(same shape)* |
+| `l1RecallCustomWakeUp: { enabled: true }` *(nested object)* | `"l1RecallCustomWakeUp.enabled": true` *(flat dotted key)* |
+
+Top-level keys (`autoInjectContext`, `maxSearchChars`, `fileLogging`, etc.) are unchanged - they were already flat.
+
+### Backwards compatibility
+
+The parser supports both forms. If your existing `plugin-config.json` still uses nested objects, it will keep working - the path-walker treats `.` as a separator and resolves `{"a": {"b": x}}` exactly like `{"a.b": x}`. **However, the nested form is no longer the recommended style and will be removed in a future major release.**
+
+If you want to be explicit about migrating now, flatten your existing config:
+
+```bash
+# Manual migration: copy values from nested objects to flat keys
+# Then delete the nested objects from plugin-config.json
+```
+
+Or use your editor's JSON flattening tools.
+
 ---
 
 ## Plugin compatibility
@@ -159,7 +222,7 @@ Set `plugins.oh-my-openagent.stripInjectedPrompts: true` in `plugin-config.json`
 
 ```json
 {
-  "plugins": { "oh-my-openagent": { "stripInjectedPrompts": true } }
+  "plugins.oh-my-openagent.stripInjectedPrompts": true
 }
 ```
 
